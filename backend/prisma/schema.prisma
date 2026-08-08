@@ -1,0 +1,125 @@
+// Schema Prisma per Saltacode Queue Manager
+// Database: PostgreSQL 15
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Area {
+  id         Int         @id @default(autoincrement())
+  nome       String      @db.VarChar(100)
+  prefisso   String      @unique @db.Char(2)
+  attiva     Boolean     @default(true)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+  servizi    Servizio[]
+  utentiAree UtenteArea[]
+
+  @@map("aree")
+}
+
+model Ruolo {
+  id     Int      @id @default(autoincrement())
+  nome   String   @unique // SUPERADMIN, ADMIN, ACCOGLIENZA, OPERATORE
+  utenti Utente[]
+
+  @@map("ruoli")
+}
+
+model Utente {
+  id               Int                 @id @default(autoincrement())
+  username         String              @unique @db.VarChar(53)
+  cognome          String              @db.VarChar(50)
+  nome             String              @db.VarChar(50)
+  passwordHash     String
+  ruoloId          Int
+  ruolo            Ruolo               @relation(fields: [ruoloId], references: [id])
+  stato            String              @default("ATTIVO") // ATTIVO, PAUSA, DISABILITATO
+  mustChangePwd    Boolean             @default(true)
+  createdAt        DateTime            @default(now())
+  utentiAree       UtenteArea[]
+  operatoriServizi OperatoreServizio[]
+  chiamate         Chiamata[]
+
+  @@map("utenti")
+}
+
+model UtenteArea {
+  id       Int    @id @default(autoincrement())
+  utenteId Int
+  areaId   Int
+  utente   Utente @relation(fields: [utenteId], references: [id])
+  area     Area   @relation(fields: [areaId], references: [id])
+
+  @@unique([utenteId, areaId])
+  @@map("utenti_aree")
+}
+
+model Servizio {
+  id               Int                     @id @default(autoincrement())
+  areaId           Int
+  area             Area                    @relation(fields: [areaId], references: [id])
+  nome             String                  @db.VarChar(100)
+  lettera          String                  @db.Char(1)
+  attivo           Boolean                 @default(true)
+  createdAt        DateTime                @default(now())
+  operatoriServizi OperatoreServizio[]
+  contatori        ContatoreGiornaliero[]
+  ticket           Ticket[]
+  chiamate         Chiamata[]
+
+  @@unique([areaId, lettera])
+  @@map("servizi")
+}
+
+model OperatoreServizio {
+  id         Int      @id @default(autoincrement())
+  utenteId   Int
+  servizioId Int
+  utente     Utente   @relation(fields: [utenteId], references: [id])
+  servizio   Servizio @relation(fields: [servizioId], references: [id])
+
+  @@unique([utenteId, servizioId])
+  @@map("operatori_servizi")
+}
+
+model ContatoreGiornaliero {
+  id           Int      @id @default(autoincrement())
+  servizioId   Int
+  servizio     Servizio @relation(fields: [servizioId], references: [id])
+  ultimoNumero Int      @default(0)
+  data         DateTime @db.Date
+
+  @@unique([servizioId, data])
+  @@map("contatore_giornaliero")
+}
+
+model Ticket {
+  id         Int      @id @default(autoincrement())
+  servizioId Int
+  servizio   Servizio @relation(fields: [servizioId], references: [id])
+  numero     String   @db.VarChar(6) // es. AA001
+  emessoPer  DateTime @default(now())
+  stato      String   @default("ATTESA") // ATTESA, CHIAMATO, SERVITO
+
+  @@unique([servizioId, numero, emessoPer])
+  @@map("ticket")
+}
+
+model Chiamata {
+  id         Int      @id @default(autoincrement())
+  utenteId   Int
+  servizioId Int
+  utente     Utente   @relation(fields: [utenteId], references: [id])
+  servizio   Servizio @relation(fields: [servizioId], references: [id])
+  ticketId   Int?
+  postazione Int
+  timestamp  DateTime @default(now())
+
+  @@map("chiamate")
+}

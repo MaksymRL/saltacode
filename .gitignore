@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+
+# Environment files (contain secrets — never commit)
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+
+# Prisma generated client
+backend/src/generated/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

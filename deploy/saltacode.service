@@ -1,0 +1,30 @@
+[Unit]
+Description=Saltacode Queue Manager Backend
+Documentation=https://github.com/your-org/saltacode
+After=network.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=saltacode
+Group=saltacode
+WorkingDirectory=/opt/saltacode/backend
+ExecStart=/usr/bin/node dist/server.js
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+EnvironmentFile=/opt/saltacode/backend/.env
+
+# Log su systemd journal
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=saltacode
+
+# Limiti di sicurezza
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
