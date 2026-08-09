@@ -1,4 +1,5 @@
 import 'dotenv/config';
+// dotenv è caricato qui — questo file deve essere importato prima di tutto il resto
 
 function required(key: string): string {
   const val = process.env[key];

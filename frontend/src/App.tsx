@@ -1,30 +1,61 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Login from './pages/Login';
+import ChangePassword from './pages/ChangePassword';
 import SuperAdminDashboard from './pages/SuperAdmin/Dashboard';
 import AdminDashboard from './pages/Admin/Dashboard';
 import AccoglienzaDashboard from './pages/Accoglienza/Dashboard';
 import OperatoreDashboard from './pages/Operatore/Dashboard';
 import MonitorDisplay from './pages/Monitor/Display';
 
-/** Guard: reindirizza al login se non autenticato. */
+/** Guard: reindirizza al login se non autenticato; al proprio dashboard se non autorizzato per ruolo. */
 function PrivateRoute({ children, ruoli }: { children: React.ReactNode; ruoli?: string[] }) {
   const { isAuthenticated, user } = useAuth();
   if (!isAuthenticated) return <Navigate to="/login" replace />;
-  if (ruoli && user && !ruoli.includes(user.ruolo)) return <Navigate to="/" replace />;
+  if (ruoli && user && !ruoli.includes(user.ruolo)) {
+    // Reindirizza alla propria dashboard
+    const dashboardByRole: Record<string, string> = {
+      SUPERADMIN: '/superadmin',
+      ADMIN: '/admin',
+      ACCOGLIENZA: '/accoglienza',
+      OPERATORE: '/operatore',
+    };
+    return <Navigate to={dashboardByRole[user.ruolo] ?? '/login'} replace />;
+  }
   return <>{children}</>;
 }
 
 function AppRoutes() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
+
+  // Redirect dalla root in base al ruolo — se mustChangePwd, vai a /change-password
+  const homePath = (() => {
+    if (!isAuthenticated || !user) return '/login';
+    if (user.mustChangePwd) return '/change-password';
+    const map: Record<string, string> = {
+      SUPERADMIN: '/superadmin',
+      ADMIN: '/admin',
+      ACCOGLIENZA: '/accoglienza',
+      OPERATORE: '/operatore',
+    };
+    return map[user.ruolo] ?? '/login';
+  })();
 
   return (
     <Routes>
-      {/* Redirect dalla root in base allo stato di autenticazione */}
-      <Route path="/" element={isAuthenticated ? <Navigate to="/login" replace /> : <Navigate to="/login" replace />} />
+      <Route path="/" element={<Navigate to={homePath} replace />} />
 
-      {/* Pagina pubblica login */}
-      <Route path="/login" element={<Login />} />
+      {/* Login — se già autenticato, vai alla dashboard */}
+      <Route
+        path="/login"
+        element={isAuthenticated ? <Navigate to={homePath} replace /> : <Login />}
+      />
+
+      {/* Cambio password obbligatorio */}
+      <Route
+        path="/change-password"
+        element={isAuthenticated ? <ChangePassword /> : <Navigate to="/login" replace />}
+      />
 
       {/* Monitor pubblico (nessuna autenticazione) */}
       <Route path="/monitor" element={<MonitorDisplay />} />
@@ -64,7 +95,7 @@ function AppRoutes() {
       />
 
       {/* Catch-all */}
-      <Route path="*" element={<Navigate to="/login" replace />} />
+      <Route path="*" element={<Navigate to={homePath} replace />} />
     </Routes>
   );
 }

@@ -4,15 +4,16 @@ import cors from 'cors';
 import compression from 'compression';
 import { errorHandler } from './middleware/errorHandler.js';
 import { logger } from './utils/logger.js';
+import { prisma } from './prisma/client.js';
 
-// Routes (placeholder — da implementare)
-// import authRoutes from './routes/auth.js';
-// import areeRoutes from './routes/aree.js';
-// import utentiRoutes from './routes/utenti.js';
-// import serviziRoutes from './routes/servizi.js';
-// import ticketRoutes from './routes/ticket.js';
-// import chiamateRoutes from './routes/chiamate.js';
-// import monitorRoutes from './routes/monitor.js';
+// Routes
+import authRoutes from './routes/auth.js';
+import areeRoutes from './routes/aree.js';
+import utentiRoutes from './routes/utenti.js';
+import serviziRoutes from './routes/servizi.js';
+import ticketRoutes from './routes/ticket.js';
+import chiamateRoutes from './routes/chiamate.js';
+import monitorRoutes from './routes/monitor.js';
 
 export function createApp() {
   const app = express();
@@ -49,8 +50,7 @@ export function createApp() {
   // Health check endpoint (pubblico)
   app.get('/health', async (_req, res) => {
     try {
-      // TODO: verificare connessione DB con prisma.$queryRaw
-      // const result = await prisma.$queryRaw`SELECT 1`;
+      await prisma.$queryRaw`SELECT 1`;
       res.status(200).json({ status: 'ok', db: 'connected' });
     } catch (err) {
       logger.error('Health check failed', { error: err });
@@ -58,14 +58,14 @@ export function createApp() {
     }
   });
 
-  // Mount API routes (TODO: uncomment dopo aver creato i file)
-  // app.use('/api/auth', authRoutes);
-  // app.use('/api/aree', areeRoutes);
-  // app.use('/api/utenti', utentiRoutes);
-  // app.use('/api/servizi', serviziRoutes);
-  // app.use('/api/ticket', ticketRoutes);
-  // app.use('/api/chiamate', chiamateRoutes);
-  // app.use('/api/monitor', monitorRoutes);
+  // API routes
+  app.use('/api/auth', authRoutes);
+  app.use('/api/aree', areeRoutes);
+  app.use('/api/utenti', utentiRoutes);
+  app.use('/api/servizi', serviziRoutes);
+  app.use('/api/ticket', ticketRoutes);
+  app.use('/api/chiamate', chiamateRoutes);
+  app.use('/api/monitor', monitorRoutes);
 
   // Error handler (deve essere l'ultimo middleware)
   app.use(errorHandler);

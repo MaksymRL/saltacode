@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { authenticate, authorize } from '../middleware/auth.js';
+import { prisma } from '../prisma/client.js';
 
 const router = Router();
 
@@ -9,12 +10,17 @@ router.use(authenticate);
 /**
  * GET /api/aree
  * Roles: SUPERADMIN
- * Lista tutte le aree con statistiche (servizi attivi, operatori attivi, ticket oggi)
+ * Lista tutte le aree
  */
 router.get('/', authorize('SUPERADMIN'), async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    // TODO: implement areeService.findAll()
-    res.status(501).json({ error: 'Not implemented yet.' });
+    const aree = await prisma.area.findMany({
+      orderBy: { nome: 'asc' },
+      include: {
+        _count: { select: { servizi: true, utentiAree: true } },
+      },
+    });
+    res.json(aree);
   } catch (err) {
     next(err);
   }
@@ -34,9 +40,21 @@ router.post('/', authorize('SUPERADMIN'), async (req: Request, res: Response, ne
       return;
     }
 
-    // TODO: implement areeService.create(nome, prefisso)
-    res.status(501).json({ error: 'Not implemented yet.' });
-  } catch (err) {
+    if (!/^[A-Z]{2}$/.test(prefisso.toUpperCase())) {
+      res.status(400).json({ error: 'Il prefisso deve essere esattamente 2 lettere maiuscole.' });
+      return;
+    }
+
+    const area = await prisma.area.create({
+      data: { nome: nome.trim(), prefisso: prefisso.toUpperCase() },
+    });
+
+    res.status(201).json(area);
+  } catch (err: any) {
+    if (err?.code === 'P2002') {
+      res.status(409).json({ error: 'Prefisso già in uso.' });
+      return;
+    }
     next(err);
   }
 });
@@ -54,9 +72,18 @@ router.patch('/:id', authorize('SUPERADMIN'), async (req: Request, res: Response
       return;
     }
 
-    // TODO: implement areeService.update(id, req.body)
-    res.status(501).json({ error: 'Not implemented yet.' });
-  } catch (err) {
+    const { nome, attiva } = req.body as { nome?: string; attiva?: boolean };
+    const data: Record<string, unknown> = {};
+    if (nome !== undefined) data['nome'] = nome.trim();
+    if (attiva !== undefined) data['attiva'] = Boolean(attiva);
+
+    const area = await prisma.area.update({ where: { id }, data });
+    res.json(area);
+  } catch (err: any) {
+    if (err?.code === 'P2025') {
+      res.status(404).json({ error: 'Area non trovata.' });
+      return;
+    }
     next(err);
   }
 });

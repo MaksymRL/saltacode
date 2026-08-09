@@ -2,7 +2,7 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { config } from '../config/index.js';
 import { JwtPayload } from '../middleware/auth.js';
-// import { prisma } from '../prisma/client.js';
+import { prisma } from '../prisma/client.js';
 
 export interface LoginResult {
   token: string;
@@ -20,29 +20,35 @@ export interface LoginResult {
  * Lancia un errore se le credenziali non sono valide.
  */
 export async function login(username: string, password: string): Promise<LoginResult | null> {
-  // TODO: implementare con Prisma
-  // const utente = await prisma.utente.findUnique({
-  //   where: { username },
-  //   include: { ruolo: true, utentiAree: true },
-  // });
-  //
-  // if (!utente || utente.stato === 'DISABILITATO') return null;
-  //
-  // const match = await bcrypt.compare(password, utente.passwordHash);
-  // if (!match) return null;
-  //
-  // const aree = utente.utentiAree.map((ua) => ua.areaId);
-  // const payload: Omit<JwtPayload, 'iat' | 'exp'> = {
-  //   sub: utente.id,
-  //   username: utente.username,
-  //   ruolo: utente.ruolo.nome,
-  //   aree,
-  // };
-  //
-  // const token = jwt.sign(payload, config.jwt.secret, { expiresIn: config.jwt.expiresIn });
-  // return { token, user: { id: utente.id, username: utente.username, ruolo: utente.ruolo.nome, aree, mustChangePwd: utente.mustChangePwd } };
+  const utente = await prisma.utente.findUnique({
+    where: { username },
+    include: { ruolo: true, utentiAree: true },
+  });
 
-  throw new Error('authService.login not implemented');
+  if (!utente || utente.stato === 'DISABILITATO') return null;
+
+  const match = await bcrypt.compare(password, utente.passwordHash);
+  if (!match) return null;
+
+  const aree = utente.utentiAree.map((ua) => ua.areaId);
+  const payload: Omit<JwtPayload, 'iat' | 'exp'> = {
+    sub: utente.id,
+    username: utente.username,
+    ruolo: utente.ruolo.nome,
+    aree,
+  };
+
+  const token = jwt.sign(payload, config.jwt.secret, { expiresIn: config.jwt.expiresIn });
+  return { 
+    token, 
+    user: { 
+      id: utente.id, 
+      username: utente.username, 
+      ruolo: utente.ruolo.nome, 
+      aree, 
+      mustChangePwd: utente.mustChangePwd 
+    } 
+  };
 }
 
 /**

@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { authenticate, authorize } from '../middleware/auth.js';
+import { prisma } from '../prisma/client.js';
 
 const router = Router();
 
@@ -10,10 +11,21 @@ router.use(authenticate);
  * Roles: ADMIN, ACCOGLIENZA, OPERATORE
  * Filtrati per area dell'utente autenticato
  */
-router.get('/', authorize('ADMIN', 'ACCOGLIENZA', 'OPERATORE'), async (req: Request, res: Response, next: NextFunction) => {
+router.get('/', authorize('SUPERADMIN', 'ADMIN', 'ACCOGLIENZA', 'OPERATORE'), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    // TODO: implement serviziService.findByArea(req.user.aree)
-    res.status(501).json({ error: 'Not implemented yet.' });
+    const user = req.user!;
+    const isSuperAdmin = user.ruolo === 'SUPERADMIN';
+
+    const servizi = await prisma.servizio.findMany({
+      where: isSuperAdmin ? {} : { areaId: { in: user.aree } },
+      include: {
+        area: { select: { id: true, nome: true, prefisso: true } },
+        _count: { select: { ticket: { where: { stato: 'ATTESA' } } } },
+      },
+      orderBy: [{ area: { nome: 'asc' } }, { nome: 'asc' }],
+    });
+
+    res.json(servizi);
   } catch (err) {
     next(err);
   }
@@ -21,10 +33,10 @@ router.get('/', authorize('ADMIN', 'ACCOGLIENZA', 'OPERATORE'), async (req: Requ
 
 /**
  * POST /api/servizi
- * Roles: ADMIN
+ * Roles: ADMIN, SUPERADMIN
  * Body: { nome: string, lettera: string, areaId: number }
  */
-router.post('/', authorize('ADMIN'), async (req: Request, res: Response, next: NextFunction) => {
+router.post('/', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { nome, lettera, areaId } = req.body as {
       nome?: string;
@@ -42,19 +54,44 @@ router.post('/', authorize('ADMIN'), async (req: Request, res: Response, next: N
       return;
     }
 
-    // TODO: implement serviziService.create({ nome, lettera, areaId }, req.user)
-    res.status(501).json({ error: 'Not implemented yet.' });
-  } catch (err) {
+    const lettUpper = lettera!.toUpperCase();
+    if (!/^[A-Z]$/.test(lettUpper)) {
+      res.status(400).json({ error: 'La lettera deve essere un singolo carattere A-Z.' });
+      return;
+    }
+
+    // ADMIN può creare servizi solo nella propria area
+    const user = req.user!;
+    if (user.ruolo === 'ADMIN' && !user.aree.includes(Number(areaId))) {
+      res.status(403).json({ error: 'Non autorizzato a creare servizi in questa area.' });
+      return;
+    }
+
+    const servizio = await prisma.servizio.create({
+      data: { nome: nome!.trim(), lettera: lettUpper, areaId: Number(areaId) },
+      include: { area: { select: { id: true, nome: true, prefisso: true } } },
+    });
+
+    res.status(201).json(servizio);
+  } catch (err: any) {
+    if (err?.code === 'P2002') {
+      res.status(409).json({ error: 'Lettera già in uso per questa area.' });
+      return;
+    }
+    if (err?.code === 'P2003') {
+      res.status(400).json({ error: 'Area non trovata.' });
+      return;
+    }
     next(err);
   }
 });
 
 /**
  * PATCH /api/servizi/:id
- * Roles: ADMIN
+ * Roles: ADMIN, SUPERADMIN
  * Body: { nome?, lettera?, attivo? }
  */
-router.patch('/:id', authorize('ADMIN'), async (req: Request, res: Response, next: NextFunction) => {
+router.patch('/:id', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = parseInt(req.params['id'] ?? '', 10);
     if (isNaN(id)) {
@@ -62,9 +99,36 @@ router.patch('/:id', authorize('ADMIN'), async (req: Request, res: Response, nex
       return;
     }
 
-    // TODO: implement serviziService.update(id, req.body, req.user)
-    res.status(501).json({ error: 'Not implemented yet.' });
-  } catch (err) {
+    const { nome, lettera, attivo } = req.body as { nome?: string; lettera?: string; attivo?: boolean };
+
+    const data: Record<string, unknown> = {};
+    if (nome !== undefined) data['nome'] = nome.trim();
+    if (attivo !== undefined) data['attivo'] = Boolean(attivo);
+    if (lettera !== undefined) {
+      const lettUpper = lettera.toUpperCase();
+      if (!/^[A-Z]$/.test(lettUpper)) {
+        res.status(400).json({ error: 'La lettera deve essere un singolo carattere A-Z.' });
+        return;
+      }
+      data['lettera'] = lettUpper;
+    }
+
+    const servizio = await prisma.servizio.update({
+      where: { id },
+      data,
+      include: { area: { select: { id: true, nome: true, prefisso: true } } },
+    });
+
+    res.json(servizio);
+  } catch (err: any) {
+    if (err?.code === 'P2025') {
+      res.status(404).json({ error: 'Servizio non trovato.' });
+      return;
+    }
+    if (err?.code === 'P2002') {
+      res.status(409).json({ error: 'Lettera già in uso per questa area.' });
+      return;
+    }
     next(err);
   }
 });

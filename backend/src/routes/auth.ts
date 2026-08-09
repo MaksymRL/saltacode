@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { loginRateLimiter, recordFailedAttempt, resetAttempts } from '../middleware/rateLimiter.js';
 import { authenticate } from '../middleware/auth.js';
-// import { authService } from '../services/authService.js';
+import * as authService from '../services/authService.js';
 
 const router = Router();
 
@@ -19,17 +19,14 @@ router.post('/login', loginRateLimiter, async (req: Request, res: Response, next
       return;
     }
 
-    // TODO: implement
-    // const result = await authService.login(username, password);
-    // if (!result) {
-    //   recordFailedAttempt(username);
-    //   res.status(401).json({ error: 'Credenziali non valide.' });
-    //   return;
-    // }
-    // resetAttempts(username);
-    // res.json(result);
-
-    res.status(501).json({ error: 'Not implemented yet.' });
+    const result = await authService.login(username, password);
+    if (!result) {
+      recordFailedAttempt(username);
+      res.status(401).json({ error: 'Credenziali non valide.' });
+      return;
+    }
+    resetAttempts(username);
+    res.json(result);
   } catch (err) {
     next(err);
   }

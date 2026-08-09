@@ -36,7 +36,7 @@ export function authenticate(req: Request, res: Response, next: NextFunction): v
   const token = authHeader.slice(7);
 
   try {
-    const payload = jwt.verify(token, config.jwt.secret) as JwtPayload;
+    const payload = jwt.verify(token, config.jwt.secret) as unknown as JwtPayload;
     req.user = payload;
 
     // Auto-refresh: se scade tra meno di refreshThresholdMinutes

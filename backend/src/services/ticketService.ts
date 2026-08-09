@@ -1,4 +1,5 @@
-// import { prisma } from '../prisma/client.js';
+import { prisma } from '../prisma/client.js';
+import { broadcast, broadcastMonitor } from './wsService.js';
 
 /**
  * Formatta un numero di ticket nel formato: prefisso (2) + lettera (1) + progressivo (3 cifre)
@@ -25,43 +26,61 @@ export async function emitTicket(servizioId: number, _operatoreId: number): Prom
   emessoPer: Date;
   stato: string;
 }> {
-  // TODO: implementare con Prisma
-  //
-  // return await prisma.$transaction(async (tx) => {
-  //   const servizio = await tx.servizio.findUnique({
-  //     where: { id: servizioId },
-  //     include: { area: true },
-  //   });
-  //   if (!servizio || !servizio.attivo) throw httpError(422, 'Servizio non disponibile.');
-  //   if (!servizio.area.attiva) throw httpError(422, 'Area non attiva.');
-  //
-  //   const oggi = new Date();
-  //   oggi.setHours(0, 0, 0, 0);
-  //
-  //   // SELECT FOR UPDATE per atomicità
-  //   const contatore = await tx.$queryRaw<{ ultimo_numero: number }[]>`
-  //     SELECT ultimo_numero FROM contatore_giornaliero
-  //     WHERE servizio_id = ${servizioId} AND data = ${oggi}
-  //     FOR UPDATE
-  //   `;
-  //
-  //   const ultimoNumero = contatore[0]?.ultimo_numero ?? 0;
-  //   if (ultimoNumero >= 999) throw httpError(422, 'Limite giornaliero (999) raggiunto per questo servizio.');
-  //
-  //   const nuovoNumero = ultimoNumero + 1;
-  //
-  //   await tx.contatoreGiornaliero.upsert({
-  //     where: { servizioId_data: { servizioId, data: oggi } },
-  //     update: { ultimoNumero: nuovoNumero },
-  //     create: { servizioId, data: oggi, ultimoNumero: nuovoNumero },
-  //   });
-  //
-  //   const numero = formatTicketNumber(servizio.area.prefisso, servizio.lettera, nuovoNumero);
-  //
-  //   return tx.ticket.create({
-  //     data: { servizioId, numero, stato: 'ATTESA' },
-  //   });
-  // });
+  return await prisma.$transaction(async (tx) => {
+    const servizio = await tx.servizio.findUnique({
+      where: { id: servizioId },
+      include: { area: true },
+    });
+    
+    if (!servizio || !servizio.attivo) {
+      throw new Error('Servizio non disponibile.');
+    }
+    if (!servizio.area.attiva) {
+      throw new Error('Area non attiva.');
+    }
 
-  throw new Error('ticketService.emitTicket not implemented');
+    const oggi = new Date();
+    oggi.setHours(0, 0, 0, 0);
+
+    // Get or create daily counter
+    const contatoreEsistente = await tx.contatoreGiornaliero.findUnique({
+      where: { servizioId_data: { servizioId, data: oggi } },
+    });
+
+    const ultimoNumero = contatoreEsistente?.ultimoNumero ?? 0;
+    if (ultimoNumero >= 999) {
+      throw new Error('Limite giornaliero (999) raggiunto per questo servizio.');
+    }
+
+    const nuovoNumero = ultimoNumero + 1;
+
+    // Update or create counter
+    await tx.contatoreGiornaliero.upsert({
+      where: { servizioId_data: { servizioId, data: oggi } },
+      update: { ultimoNumero: nuovoNumero },
+      create: { servizioId, data: oggi, ultimoNumero: nuovoNumero },
+    });
+
+    const numero = formatTicketNumber(servizio.area.prefisso, servizio.lettera, nuovoNumero);
+
+    const ticket = await tx.ticket.create({
+      data: { servizioId, numero, stato: 'ATTESA' },
+    });
+
+    // Get queue count for WebSocket broadcast
+    const codaCount = await tx.ticket.count({
+      where: { servizioId, stato: 'ATTESA' },
+    });
+
+    // Broadcast to area and monitors
+    const message = { 
+      type: 'TICKET_EMESSO' as const, 
+      servizioId, 
+      coda: codaCount 
+    };
+    broadcast(servizio.areaId, message);
+    broadcastMonitor(message);
+
+    return ticket;
+  });
 }
