@@ -1,0 +1,38 @@
+{
+  "name": "saltacode-queue-manager",
+  "version": "1.0.0",
+  "description": "Saltacode Queue Manager - Sistema moderno per la gestione delle code CISL",
+  "private": true,
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "npm run dev --workspace=backend",
+    "dev:frontend": "npm run dev --workspace=frontend",
+    "build": "npm run build --workspaces",
+    "build:backend": "npm run build --workspace=backend",
+    "build:frontend": "npm run build --workspace=frontend",
+    "test": "npm run test --workspaces",
+    "test:backend": "npm run test --workspace=backend",
+    "test:frontend": "npm run test --workspace=frontend",
+    "db:migrate": "npm run db:migrate --workspace=backend",
+    "db:generate": "npm run db:generate --workspace=backend",
+    "db:seed": "npm run db:seed --workspace=backend",
+    "install:all": "npm install && npm install --workspaces",
+    "clean": "npm run clean:backend && npm run clean:frontend",
+    "clean:backend": "rimraf backend/dist backend/node_modules",
+    "clean:frontend": "rimraf frontend/dist frontend/node_modules"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "rimraf": "^5.0.5"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  },
+  "author": "Saltacode Team",
+  "license": "MIT"
+}

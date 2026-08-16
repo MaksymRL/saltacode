@@ -14,6 +14,7 @@ import serviziRoutes from './routes/servizi.js';
 import ticketRoutes from './routes/ticket.js';
 import chiamateRoutes from './routes/chiamate.js';
 import monitorRoutes from './routes/monitor.js';
+import { healthRouter } from './routes/health.js';
 
 export function createApp() {
   const app = express();
@@ -47,16 +48,8 @@ export function createApp() {
     next();
   });
 
-  // Health check endpoint (pubblico)
-  app.get('/health', async (_req, res) => {
-    try {
-      await prisma.$queryRaw`SELECT 1`;
-      res.status(200).json({ status: 'ok', db: 'connected' });
-    } catch (err) {
-      logger.error('Health check failed', { error: err });
-      res.status(503).json({ status: 'error', db: 'unreachable' });
-    }
-  });
+  // Health check endpoints (pubblici)
+  app.use('/health', healthRouter);
 
   // API routes
   app.use('/api/auth', authRoutes);

@@ -112,12 +112,13 @@ model ContatoreGiornaliero {
 }
 
 model Ticket {
-  id         Int      @id @default(autoincrement())
+  id         Int        @id @default(autoincrement())
   servizioId Int
-  servizio   Servizio @relation(fields: [servizioId], references: [id])
-  numero     String   @db.VarChar(6) // es. CAA001
-  emessoPer  DateTime @default(now())
-  stato      String   @default("ATTESA") // ATTESA, CHIAMATO, SERVITO
+  servizio   Servizio   @relation(fields: [servizioId], references: [id])
+  numero     String     @db.VarChar(6) // es. CAA001
+  emessoPer  DateTime   @default(now())
+  stato      String     @default("ATTESA") // ATTESA, CHIAMATO, SERVITO
+  chiamate   Chiamata[]
 
   @@unique([servizioId, numero, emessoPer])
   @@map("ticket")
@@ -130,6 +131,7 @@ model Chiamata {
   utente     Utente   @relation(fields: [utenteId], references: [id])
   servizio   Servizio @relation(fields: [servizioId], references: [id])
   ticketId   Int?
+  ticket     Ticket?  @relation(fields: [ticketId], references: [id])
   postazione Int
   timestamp  DateTime @default(now())
 

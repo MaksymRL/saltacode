@@ -108,8 +108,8 @@ module.exports = {
       name: 'saltacode-backend',
       cwd: '/opt/saltacode/backend',
       script: 'src/server.ts',
-      interpreter: 'node',
-      interpreter_args: '--import tsx/esm',
+      interpreter: 'npx',
+      interpreter_args: 'tsx',
       instances: 1,
       autorestart: true,
       watch: false,
@@ -195,22 +195,39 @@ rm -f /etc/nginx/sites-enabled/default
 
 nginx -t && systemctl restart nginx
 
+# ── Installa backup automatico ─────────────────────────────────────────
+echo "[9/9] Configurazione backup automatico..."
+
+# Crea directory backup
+mkdir -p /var/backups/saltacode
+chown $APP_USER:$APP_USER /var/backups/saltacode
+
+# Installa cron job per backup giornaliero (3:00 AM)
+(sudo -u $APP_USER crontab -l 2>/dev/null; echo "0 3 * * * cd $APP_DIR/backend && /usr/bin/node dist/scripts/daily-backup.js >> /var/log/saltacode/backup.log 2>&1") | sudo -u $APP_USER crontab -
+
 echo ""
 echo "============================================"
 echo "  ✅ Setup completato!"
 echo "============================================"
 echo ""
-echo "  Backend:  http://localhost:$PORT_BACKEND"
-echo "  Frontend: http://$(hostname -I | awk '{print $1}')"
-echo "  Monitor:  http://$(hostname -I | awk '{print $1}')/monitor"
+echo "  🌐 Accesso:"
+echo "    Frontend: http://$(hostname -I | awk '{print $1}')"
+echo "    Monitor:  http://$(hostname -I | awk '{print $1}')/monitor"
+echo "    Health:   http://$(hostname -I | awk '{print $1}')/health"
 echo ""
-echo "  Credenziali iniziali:"
+echo "  🔐 Credenziali iniziali:"
 echo "    username: superadmin"
 echo "    password: Admin@Saltacode1"
 echo ""
-echo "  Comandi utili:"
+echo "  📊 Monitoraggio:"
 echo "    pm2 status              → stato processi"
 echo "    pm2 logs saltacode-backend  → log backend"
 echo "    pm2 restart saltacode-backend"
 echo "    systemctl status nginx"
+echo ""
+echo "  💾 Backup automatico:"
+echo "    Esecuzione: ogni giorno alle 03:00"
+echo "    Directory: /var/backups/saltacode/"
+echo "    Log: /var/log/saltacode/backup.log"
+echo "    Test manuale: sudo -u $APP_USER node $APP_DIR/backend/dist/scripts/daily-backup.js"
 echo ""
