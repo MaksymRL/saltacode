@@ -2,10 +2,15 @@ import { useState, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import apiClient from '../api/client';
-import type { AuthUser } from '../context/AuthContext';
+import type { PendingAuth } from '../context/AuthContext';
+
+interface LoginResponse {
+  pendingToken: string;
+  user: PendingAuth['user'];
+}
 
 export default function Login() {
-  const { login } = useAuth();
+  const { setPending } = useAuth();
   const navigate = useNavigate();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -18,71 +23,105 @@ export default function Login() {
     setLoading(true);
 
     try {
-      const res = await apiClient.post<{ token: string; user: AuthUser }>('/auth/login', {
-        username,
-        password,
-      });
+      const res = await apiClient.post<LoginResponse>('/auth/login', { username, password });
+      const { pendingToken, user } = res.data;
 
-      const { token, user } = res.data;
-      login(user, token);
+      // Salva lo stato pending nel context
+      setPending({ pendingToken, user });
 
-      // Redirect in base al ruolo
-      const routes: Record<string, string> = {
-        SUPERADMIN: '/superadmin',
-        ADMIN: '/admin',
-        ACCOGLIENZA: '/accoglienza',
-        OPERATORE: '/operatore',
-      };
-      navigate(routes[user.ruolo] ?? '/');
-    } catch {
-      setError('Credenziali non valide. Riprova.');
+      // Se l'utente ha un solo ruolo → selezione automatica, salta la schermata
+      if (user.ruoli.length === 1) {
+        navigate('/select-role', { replace: true });
+      } else {
+        navigate('/select-role', { replace: true });
+      }
+    } catch (err: any) {
+      const msg = err?.response?.data?.error;
+      if (err?.response?.status === 429) {
+        setError(msg ?? 'Troppi tentativi. Riprova tra qualche minuto.');
+      } else {
+        setError('Credenziali non valide. Riprova.');
+      }
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh' }}>
-      <form onSubmit={handleSubmit} style={{ width: 320, display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <h1 style={{ textAlign: 'center', marginBottom: 8 }}>Saltacode</h1>
-        <h2 style={{ textAlign: 'center', fontWeight: 'normal', fontSize: 16, marginBottom: 16 }}>
-          Gestione Code CISL
-        </h2>
+    <div style={{
+      display: 'flex', justifyContent: 'center', alignItems: 'center',
+      minHeight: '100vh', background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)',
+    }}>
+      <div style={{
+        background: 'white', borderRadius: 12, padding: 40, width: 360,
+        boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+      }}>
+        <div style={{ textAlign: 'center', marginBottom: 32 }}>
+          <div style={{ fontSize: 40, marginBottom: 8 }}>🎫</div>
+          <h1 style={{ margin: 0, fontSize: 24, fontWeight: 800, color: '#1a1a2e' }}>Saltacode</h1>
+          <p style={{ margin: '4px 0 0', color: '#6b7280', fontSize: 14 }}>Gestione Code CISL</p>
+        </div>
 
-        <label>
-          Username
-          <input
-            type="text"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            autoComplete="username"
-            required
-            style={{ display: 'block', width: '100%', padding: '8px', marginTop: 4 }}
-          />
-        </label>
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <label>
+            <span style={labelStyle}>Username</span>
+            <input
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              autoComplete="username"
+              required
+              autoFocus
+              style={inputStyle}
+            />
+          </label>
 
-        <label>
-          Password
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete="current-password"
-            required
-            style={{ display: 'block', width: '100%', padding: '8px', marginTop: 4 }}
-          />
-        </label>
+          <label>
+            <span style={labelStyle}>Password</span>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
+              required
+              style={inputStyle}
+            />
+          </label>
 
-        {error && (
-          <p role="alert" style={{ color: 'red', margin: 0 }}>
-            {error}
-          </p>
-        )}
+          {error && (
+            <div role="alert" style={{
+              background: '#fee2e2', border: '1px solid #fca5a5',
+              borderRadius: 6, padding: '8px 12px', color: '#991b1b', fontSize: 13,
+            }}>
+              {error}
+            </div>
+          )}
 
-        <button type="submit" disabled={loading} style={{ padding: '10px', marginTop: 8 }}>
-          {loading ? 'Accesso in corso…' : 'Accedi'}
-        </button>
-      </form>
+          <button
+            type="submit"
+            disabled={loading}
+            style={{
+              background: loading ? '#9ca3af' : '#1a1a2e',
+              color: 'white', border: 'none', borderRadius: 6,
+              padding: '11px', fontSize: 15, fontWeight: 700,
+              cursor: loading ? 'not-allowed' : 'pointer',
+              marginTop: 4,
+            }}
+          >
+            {loading ? 'Accesso in corso…' : 'Accedi'}
+          </button>
+        </form>
+      </div>
     </div>
   );
 }
+
+const labelStyle: React.CSSProperties = {
+  display: 'block', fontSize: 12, fontWeight: 600,
+  color: '#374151', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5,
+};
+const inputStyle: React.CSSProperties = {
+  display: 'block', width: '100%', padding: '9px 12px',
+  border: '1.5px solid #d1d5db', borderRadius: 6, fontSize: 14,
+  boxSizing: 'border-box', outline: 'none',
+};

@@ -7,29 +7,35 @@ const router = Router();
 
 router.use(authenticate);
 
+// ── Helper: includi sempre ruoli e aree ──────────────────────────────────────
+const INCLUDE_UTENTE = {
+  utentiRuoli: { include: { ruolo: { select: { id: true, nome: true } } } },
+  utentiAree: { select: { areaId: true } },
+} as const;
+
+function sanitize(u: any) {
+  const { passwordHash: _p, ...rest } = u;
+  return rest;
+}
+
 /**
  * GET /api/utenti
- * Roles: SUPERADMIN (tutti), ADMIN (solo della propria area)
+ * SUPERADMIN → tutti; ADMIN → solo utenti nella propria area
  */
 router.get('/', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const user = req.user!;
-    const isSuperAdmin = user.ruolo === 'SUPERADMIN';
+    const { ruolo, aree } = req.user!;
+    const isSuperAdmin = ruolo === 'SUPERADMIN';
 
     const utenti = await prisma.utente.findMany({
       where: isSuperAdmin
         ? {}
-        : { utentiAree: { some: { areaId: { in: user.aree } } } },
-      include: {
-        ruolo: { select: { id: true, nome: true } },
-        utentiAree: { select: { areaId: true } },
-      },
+        : { utentiAree: { some: { areaId: { in: aree } } } },
+      include: INCLUDE_UTENTE,
       orderBy: [{ cognome: 'asc' }, { nome: 'asc' }],
     });
 
-    // Non esporre l'hash della password
-    const sanitized = utenti.map(({ passwordHash: _p, ...u }) => u);
-    res.json(sanitized);
+    res.json(utenti.map(sanitize));
   } catch (err) {
     next(err);
   }
@@ -37,34 +43,58 @@ router.get('/', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res: Resp
 
 /**
  * POST /api/utenti
- * Roles: SUPERADMIN (Admin, Accoglienza), ADMIN (Operatori della propria area)
- * Body: { cognome, nome, ruoloId, aree: number[] }
+ * SUPERADMIN → può creare qualsiasi ruolo
+ * ADMIN → solo OPERATORE nella propria area
+ *
+ * Body: { cognome, nome, ruoli: string[], aree: number[] }
  * Response: { ...utente, tempPassword: string }
  */
 router.post('/', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { cognome, nome, ruoloId, aree } = req.body as {
+    const { cognome, nome, ruoli: ruoliRichiesti, aree } = req.body as {
       cognome?: string;
       nome?: string;
-      ruoloId?: number;
+      ruoli?: string[];
       aree?: number[];
     };
 
     const missing: string[] = [];
     if (!cognome) missing.push('cognome');
     if (!nome) missing.push('nome');
-    if (!ruoloId) missing.push('ruoloId');
+    if (!ruoliRichiesti || ruoliRichiesti.length === 0) missing.push('ruoli');
     if (!aree || aree.length === 0) missing.push('aree');
-
     if (missing.length > 0) {
       res.status(400).json({ error: 'Campi obbligatori mancanti.', fields: missing });
       return;
     }
 
-    // Genera username base
-    const baseUsername = authService.generateUsername(nome!, cognome!);
+    const requester = req.user!;
 
-    // Controlla unicità username con suffissi numerici se necessario
+    // ADMIN: solo OPERATORE, solo nella propria area
+    if (requester.ruolo === 'ADMIN') {
+      const ruoliNonConsentiti = ruoliRichiesti!.filter((r) => r !== 'OPERATORE');
+      if (ruoliNonConsentiti.length > 0) {
+        res.status(403).json({ error: "L'Admin può assegnare solo il ruolo OPERATORE." });
+        return;
+      }
+      const areeNonAutorizzate = aree!.filter((a) => !requester.aree.includes(Number(a)));
+      if (areeNonAutorizzate.length > 0) {
+        res.status(403).json({ error: 'Non autorizzato a creare utenti in queste aree.' });
+        return;
+      }
+    }
+
+    // Verifica che i ruoli richiesti esistano
+    const ruoliDB = await prisma.ruolo.findMany({
+      where: { nome: { in: ruoliRichiesti } },
+    });
+    if (ruoliDB.length !== ruoliRichiesti!.length) {
+      res.status(400).json({ error: 'Uno o più ruoli non validi.' });
+      return;
+    }
+
+    // Genera username univoco
+    const baseUsername = authService.generateUsername(nome!, cognome!);
     let username = baseUsername;
     let suffix = 2;
     while (await prisma.utente.findUnique({ where: { username } })) {
@@ -84,27 +114,22 @@ router.post('/', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res: Res
         cognome: cognome!.trim(),
         nome: nome!.trim(),
         passwordHash,
-        ruoloId: Number(ruoloId),
         mustChangePwd: true,
+        stato: 'ATTIVO',
+        utentiRuoli: {
+          create: ruoliDB.map((r) => ({ ruoloId: r.id })),
+        },
         utentiAree: {
           create: aree!.map((areaId) => ({ areaId: Number(areaId) })),
         },
       },
-      include: {
-        ruolo: { select: { id: true, nome: true } },
-        utentiAree: { select: { areaId: true } },
-      },
+      include: INCLUDE_UTENTE,
     });
 
-    const { passwordHash: _p, ...sanitized } = utente;
-    res.status(201).json({ ...sanitized, tempPassword });
+    res.status(201).json({ ...sanitize(utente), tempPassword });
   } catch (err: any) {
     if (err?.code === 'P2002') {
       res.status(409).json({ error: 'Username già in uso.' });
-      return;
-    }
-    if (err?.code === 'P2003') {
-      res.status(400).json({ error: 'Ruolo o area non valido.' });
       return;
     }
     next(err);
@@ -113,8 +138,10 @@ router.post('/', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res: Res
 
 /**
  * PATCH /api/utenti/:id
- * Roles: SUPERADMIN, ADMIN
- * Body: { cognome?, nome?, stato?, aree?, resetPassword?: true }
+ * SUPERADMIN → qualsiasi utente
+ * ADMIN → solo utenti della propria area
+ *
+ * Body: { cognome?, nome?, stato?, aree?, ruoli?: string[], resetPassword?: true }
  */
 router.patch('/:id', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -124,11 +151,31 @@ router.patch('/:id', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res:
       return;
     }
 
-    const { cognome, nome, stato, aree, resetPassword } = req.body as {
+    const requester = req.user!;
+
+    // ADMIN: solo utenti della propria area
+    if (requester.ruolo === 'ADMIN') {
+      const target = await prisma.utente.findUnique({
+        where: { id },
+        include: { utentiAree: true },
+      });
+      if (!target) {
+        res.status(404).json({ error: 'Utente non trovato.' });
+        return;
+      }
+      const targetAree = target.utentiAree.map((ua) => ua.areaId);
+      if (!targetAree.some((a) => requester.aree.includes(a))) {
+        res.status(403).json({ error: 'Non autorizzato a modificare questo utente.' });
+        return;
+      }
+    }
+
+    const { cognome, nome, stato, aree, ruoli: nuoviRuoli, resetPassword } = req.body as {
       cognome?: string;
       nome?: string;
       stato?: string;
       aree?: number[];
+      ruoli?: string[];
       resetPassword?: boolean;
     };
 
@@ -151,8 +198,8 @@ router.patch('/:id', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res:
       data['mustChangePwd'] = true;
     }
 
-    // Update in transazione se bisogna anche aggiornare le aree
     const utente = await prisma.$transaction(async (tx) => {
+      // Aggiorna aree se fornite
       if (aree !== undefined) {
         await tx.utenteArea.deleteMany({ where: { utenteId: id } });
         await tx.utenteArea.createMany({
@@ -160,18 +207,23 @@ router.patch('/:id', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res:
         });
       }
 
+      // Aggiorna ruoli se forniti
+      if (nuoviRuoli !== undefined) {
+        const ruoliDB = await tx.ruolo.findMany({ where: { nome: { in: nuoviRuoli } } });
+        await tx.utenteRuolo.deleteMany({ where: { utenteId: id } });
+        await tx.utenteRuolo.createMany({
+          data: ruoliDB.map((r) => ({ utenteId: id, ruoloId: r.id })),
+        });
+      }
+
       return tx.utente.update({
         where: { id },
         data,
-        include: {
-          ruolo: { select: { id: true, nome: true } },
-          utentiAree: { select: { areaId: true } },
-        },
+        include: INCLUDE_UTENTE,
       });
     });
 
-    const { passwordHash: _p, ...sanitized } = utente;
-    res.json(tempPassword ? { ...sanitized, tempPassword } : sanitized);
+    res.json(tempPassword ? { ...sanitize(utente), tempPassword } : sanitize(utente));
   } catch (err: any) {
     if (err?.code === 'P2025') {
       res.status(404).json({ error: 'Utente non trovato.' });
@@ -183,7 +235,6 @@ router.patch('/:id', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res:
 
 /**
  * POST /api/utenti/change-password
- * Roles: tutti (utente autenticato che vuole cambiare la propria password)
  * Body: { currentPassword: string, newPassword: string }
  */
 router.post('/change-password', async (req: Request, res: Response, next: NextFunction) => {
@@ -212,7 +263,8 @@ router.post('/change-password', async (req: Request, res: Response, next: NextFu
       return;
     }
 
-    const match = await import('bcrypt').then((bc) => bc.compare(currentPassword, utente.passwordHash));
+    const bc = await import('bcrypt');
+    const match = await bc.compare(currentPassword, utente.passwordHash);
     if (!match) {
       res.status(401).json({ error: 'Password attuale non corretta.' });
       return;
