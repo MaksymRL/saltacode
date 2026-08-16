@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Login from './pages/Login';
+import SelectRole from './pages/SelectRole';
 import ChangePassword from './pages/ChangePassword';
 import SuperAdminDashboard from './pages/SuperAdmin/Dashboard';
 import AdminDashboard from './pages/Admin/Dashboard';
@@ -8,12 +9,19 @@ import AccoglienzaDashboard from './pages/Accoglienza/Dashboard';
 import OperatoreDashboard from './pages/Operatore/Dashboard';
 import MonitorDisplay from './pages/Monitor/Display';
 
-/** Guard: reindirizza al login se non autenticato; al proprio dashboard se non autorizzato per ruolo. */
+/**
+ * Guard per route che richiedono autenticazione completa (ruolo scelto).
+ * Se l'utente ha solo il pending token → rimanda a /select-role.
+ * Se non è autenticato → rimanda al login.
+ * Se il ruolo non corrisponde → rimanda alla propria dashboard.
+ */
 function PrivateRoute({ children, ruoli }: { children: React.ReactNode; ruoli?: string[] }) {
-  const { isAuthenticated, user } = useAuth();
+  const { isAuthenticated, isPending, user } = useAuth();
+
+  if (isPending) return <Navigate to="/select-role" replace />;
   if (!isAuthenticated) return <Navigate to="/login" replace />;
+
   if (ruoli && user && !ruoli.includes(user.ruolo)) {
-    // Reindirizza alla propria dashboard
     const dashboardByRole: Record<string, string> = {
       SUPERADMIN: '/superadmin',
       ADMIN: '/admin',
@@ -22,14 +30,16 @@ function PrivateRoute({ children, ruoli }: { children: React.ReactNode; ruoli?: 
     };
     return <Navigate to={dashboardByRole[user.ruolo] ?? '/login'} replace />;
   }
+
   return <>{children}</>;
 }
 
 function AppRoutes() {
-  const { isAuthenticated, user } = useAuth();
+  const { isAuthenticated, isPending, user } = useAuth();
 
-  // Redirect dalla root in base al ruolo — se mustChangePwd, vai a /change-password
+  // Calcola dove mandare l'utente dalla root
   const homePath = (() => {
+    if (isPending) return '/select-role';
     if (!isAuthenticated || !user) return '/login';
     if (user.mustChangePwd) return '/change-password';
     const map: Record<string, string> = {
@@ -43,12 +53,19 @@ function AppRoutes() {
 
   return (
     <Routes>
+      {/* Root redirect */}
       <Route path="/" element={<Navigate to={homePath} replace />} />
 
       {/* Login — se già autenticato, vai alla dashboard */}
       <Route
         path="/login"
-        element={isAuthenticated ? <Navigate to={homePath} replace /> : <Login />}
+        element={isAuthenticated || isPending ? <Navigate to={homePath} replace /> : <Login />}
+      />
+
+      {/* Selezione ruolo (dopo login) */}
+      <Route
+        path="/select-role"
+        element={isPending ? <SelectRole /> : <Navigate to={homePath} replace />}
       />
 
       {/* Cambio password obbligatorio */}
@@ -57,41 +74,25 @@ function AppRoutes() {
         element={isAuthenticated ? <ChangePassword /> : <Navigate to="/login" replace />}
       />
 
-      {/* Monitor pubblico (nessuna autenticazione) */}
+      {/* Monitor pubblico — nessuna autenticazione */}
       <Route path="/monitor" element={<MonitorDisplay />} />
 
-      {/* Route protette per ruolo */}
+      {/* Dashboard per ruolo */}
       <Route
         path="/superadmin/*"
-        element={
-          <PrivateRoute ruoli={['SUPERADMIN']}>
-            <SuperAdminDashboard />
-          </PrivateRoute>
-        }
+        element={<PrivateRoute ruoli={['SUPERADMIN']}><SuperAdminDashboard /></PrivateRoute>}
       />
       <Route
         path="/admin/*"
-        element={
-          <PrivateRoute ruoli={['ADMIN']}>
-            <AdminDashboard />
-          </PrivateRoute>
-        }
+        element={<PrivateRoute ruoli={['ADMIN']}><AdminDashboard /></PrivateRoute>}
       />
       <Route
         path="/accoglienza/*"
-        element={
-          <PrivateRoute ruoli={['ACCOGLIENZA']}>
-            <AccoglienzaDashboard />
-          </PrivateRoute>
-        }
+        element={<PrivateRoute ruoli={['ACCOGLIENZA']}><AccoglienzaDashboard /></PrivateRoute>}
       />
       <Route
         path="/operatore/*"
-        element={
-          <PrivateRoute ruoli={['OPERATORE']}>
-            <OperatoreDashboard />
-          </PrivateRoute>
-        }
+        element={<PrivateRoute ruoli={['OPERATORE']}><OperatoreDashboard /></PrivateRoute>}
       />
 
       {/* Catch-all */}

@@ -24,9 +24,9 @@ model Area {
 }
 
 model Ruolo {
-  id     Int      @id @default(autoincrement())
-  nome   String   @unique // SUPERADMIN, ADMIN, ACCOGLIENZA, OPERATORE
-  utenti Utente[]
+  id          Int          @id @default(autoincrement())
+  nome        String       @unique // SUPERADMIN, ADMIN, ACCOGLIENZA, OPERATORE
+  utentiRuoli UtenteRuolo[]
 
   @@map("ruoli")
 }
@@ -37,23 +37,35 @@ model Utente {
   cognome          String              @db.VarChar(50)
   nome             String              @db.VarChar(50)
   passwordHash     String
-  ruoloId          Int
-  ruolo            Ruolo               @relation(fields: [ruoloId], references: [id])
   stato            String              @default("ATTIVO") // ATTIVO, PAUSA, DISABILITATO
   mustChangePwd    Boolean             @default(true)
   createdAt        DateTime            @default(now())
   utentiAree       UtenteArea[]
+  utentiRuoli      UtenteRuolo[]
   operatoriServizi OperatoreServizio[]
   chiamate         Chiamata[]
 
   @@map("utenti")
 }
 
+/// Tabella di join tra Utente e Ruolo (many-to-many).
+/// Un utente può avere più ruoli (es. ADMIN + OPERATORE).
+model UtenteRuolo {
+  id       Int    @id @default(autoincrement())
+  utenteId Int
+  ruoloId  Int
+  utente   Utente @relation(fields: [utenteId], references: [id], onDelete: Cascade)
+  ruolo    Ruolo  @relation(fields: [ruoloId], references: [id])
+
+  @@unique([utenteId, ruoloId])
+  @@map("utenti_ruoli")
+}
+
 model UtenteArea {
   id       Int    @id @default(autoincrement())
   utenteId Int
   areaId   Int
-  utente   Utente @relation(fields: [utenteId], references: [id])
+  utente   Utente @relation(fields: [utenteId], references: [id], onDelete: Cascade)
   area     Area   @relation(fields: [areaId], references: [id])
 
   @@unique([utenteId, areaId])
@@ -103,7 +115,7 @@ model Ticket {
   id         Int      @id @default(autoincrement())
   servizioId Int
   servizio   Servizio @relation(fields: [servizioId], references: [id])
-  numero     String   @db.VarChar(6) // es. AA001
+  numero     String   @db.VarChar(6) // es. CAA001
   emessoPer  DateTime @default(now())
   stato      String   @default("ATTESA") // ATTESA, CHIAMATO, SERVITO
 

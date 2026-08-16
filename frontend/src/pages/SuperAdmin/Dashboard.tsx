@@ -11,11 +11,6 @@ interface Area {
   _count: { servizi: number; utentiAree: number };
 }
 
-interface Ruolo {
-  id: number;
-  nome: string;
-}
-
 interface Utente {
   id: number;
   username: string;
@@ -23,7 +18,7 @@ interface Utente {
   nome: string;
   stato: string;
   mustChangePwd: boolean;
-  ruolo: { id: number; nome: string };
+  utentiRuoli: { ruolo: { id: number; nome: string } }[];
   utentiAree: { areaId: number }[];
 }
 
@@ -82,11 +77,10 @@ export default function SuperAdminDashboard() {
   // ── Utenti ────────────────────────────────────────────────────────────────
   const [utenti, setUtenti] = useState<Utente[]>([]);
   const [utentiLoading, setUtentiLoading] = useState(false);
-  const [ruoli, setRuoli] = useState<Ruolo[]>([]);
   const [utentiError, setUtentiError] = useState('');
   const [utentiSuccess, setUtentiSuccess] = useState('');
   const [nuovoUtente, setNuovoUtente] = useState({
-    cognome: '', nome: '', ruoloId: '', aree: [] as number[],
+    cognome: '', nome: '', ruoliSelezionati: [] as string[], aree: [] as number[],
   });
   const [tempPwd, setTempPwd] = useState<string | null>(null);
 
@@ -99,16 +93,6 @@ export default function SuperAdminDashboard() {
       ]);
       setUtenti(uRes.data);
       setAree(aRes.data);
-      // Carica ruoli dal primo utente o usa default
-      const ruoliSet = new Set<string>();
-      uRes.data.forEach((u) => ruoliSet.add(u.ruolo.nome));
-      // Ruoli hardcoded perché non c'è un endpoint dedicato
-      setRuoli([
-        { id: 1, nome: 'SUPERADMIN' },
-        { id: 2, nome: 'ADMIN' },
-        { id: 3, nome: 'ACCOGLIENZA' },
-        { id: 4, nome: 'OPERATORE' },
-      ]);
     } catch {
       setUtentiError('Errore nel caricamento utenti.');
     } finally {
@@ -129,15 +113,24 @@ export default function SuperAdminDashboard() {
       const res = await apiClient.post<Utente & { tempPassword: string }>('/utenti', {
         cognome: nuovoUtente.cognome,
         nome: nuovoUtente.nome,
-        ruoloId: Number(nuovoUtente.ruoloId),
+        ruoli: nuovoUtente.ruoliSelezionati,
         aree: nuovoUtente.aree,
       });
       setTempPwd(res.data.tempPassword);
-      setNuovoUtente({ cognome: '', nome: '', ruoloId: '', aree: [] });
+      setNuovoUtente({ cognome: '', nome: '', ruoliSelezionati: [], aree: [] });
       loadUtenti();
     } catch (err: any) {
       setUtentiError(err?.response?.data?.error ?? 'Errore creazione utente.');
     }
+  };
+
+  const toggleRuoloUtente = (ruolo: string) => {
+    setNuovoUtente((prev) => ({
+      ...prev,
+      ruoliSelezionati: prev.ruoliSelezionati.includes(ruolo)
+        ? prev.ruoliSelezionati.filter((r) => r !== ruolo)
+        : [...prev.ruoliSelezionati, ruolo],
+    }));
   };
 
   const handleResetPwd = async (utenteId: number) => {
@@ -329,16 +322,16 @@ export default function SuperAdminDashboard() {
                       onChange={(e) => setNuovoUtente((p) => ({ ...p, nome: e.target.value }))}
                       placeholder="Mario" required />
                   </div>
-                  <div>
-                    <label style={labelStyle}>Ruolo</label>
-                    <select style={inputStyle} value={nuovoUtente.ruoloId}
-                      onChange={(e) => setNuovoUtente((p) => ({ ...p, ruoloId: e.target.value }))}
-                      required>
-                      <option value="">Seleziona…</option>
-                      {ruoli.map((r) => (
-                        <option key={r.id} value={r.id}>{r.nome}</option>
-                      ))}
-                    </select>
+                </div>
+                <div style={{ marginBottom: 12 }}>
+                  <label style={labelStyle}>Ruoli (uno o più)</label>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
+                    {['SUPERADMIN', 'ADMIN', 'ACCOGLIENZA', 'OPERATORE'].map((r) => (
+                      <label key={r} style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', padding: '4px 8px', border: `1px solid ${nuovoUtente.ruoliSelezionati.includes(r) ? '#1a1a2e' : '#d1d5db'}`, borderRadius: 4, background: nuovoUtente.ruoliSelezionati.includes(r) ? '#1a1a2e' : 'white', color: nuovoUtente.ruoliSelezionati.includes(r) ? 'white' : '#374151' }}>
+                        <input type="checkbox" checked={nuovoUtente.ruoliSelezionati.includes(r)} onChange={() => toggleRuoloUtente(r)} style={{ display: 'none' }} />
+                        {r}
+                      </label>
+                    ))}
                   </div>
                 </div>
                 <div style={{ marginBottom: 12 }}>
@@ -385,7 +378,9 @@ export default function SuperAdminDashboard() {
                           <td style={tdStyle}><code>{u.username}</code></td>
                           <td style={tdStyle}>{u.cognome} {u.nome}</td>
                           <td style={tdStyle}>
-                            <span style={{ fontSize: 12, fontWeight: 600, color: '#555' }}>{u.ruolo.nome}</span>
+                            <span style={{ fontSize: 12, fontWeight: 600, color: '#555' }}>
+                              {u.utentiRuoli.map((ur) => ur.ruolo.nome).join(', ')}
+                            </span>
                           </td>
                           <td style={tdStyle}>
                             <span style={{

@@ -144,10 +144,13 @@ export default function AdminDashboard() {
     try {
       const areaId = user?.aree[0];
       if (!areaId) { setOperatoriError('Nessuna area assegnata.'); return; }
+      // Recupera l'id del ruolo OPERATORE dalla lista utenti già caricata
+      // oppure usa l'endpoint (ruoloId=4 è OPERATORE per convenzione del seed,
+      // ma lo inviamo come nome e il backend valida)
       const res = await apiClient.post<Utente & { tempPassword: string }>('/utenti', {
         cognome: nuovoOp.cognome,
         nome: nuovoOp.nome,
-        ruoloId: 4, // OPERATORE
+        ruoloId: 4, // OPERATORE — hardcoded perché l'Admin può creare solo operatori
         aree: [areaId],
       });
       setTempPwd({ username: res.data.username, pwd: res.data.tempPassword });
@@ -178,7 +181,12 @@ export default function AdminDashboard() {
   return (
     <div style={{ minHeight: '100vh', background: '#f5f5f5', fontFamily: 'system-ui, sans-serif' }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 24px', background: '#16213e', color: 'white' }}>
-        <h1 style={{ margin: 0, fontSize: 20 }}>📋 Saltacode — Admin</h1>
+        <div>
+          <h1 style={{ margin: 0, fontSize: 20 }}>📋 Saltacode — Admin</h1>
+          <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>
+            {servizi.length > 0 ? `Area: ${servizi[0]?.area.nome}` : ''}
+          </div>
+        </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <span style={{ color: '#aaa', fontSize: 14 }}>{user?.username}</span>
           <button onClick={logout} style={btnStyle('#ef4444')}>Esci</button>

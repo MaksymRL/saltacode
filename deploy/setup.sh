@@ -90,7 +90,7 @@ echo "[8/9] Build backend..."
 cd $APP_DIR/backend
 npm ci --omit=dev
 npx prisma generate
-npx prisma migrate deploy
+npx prisma migrate deploy   # applica TUTTE le migrazioni in ordine (inclusa multi_ruolo)
 npm run build || true   # ignora se il build fallisce (tsx runtime è ok)
 
 echo "[8/9] Build frontend..."

@@ -5,6 +5,23 @@ import { JwtPayload } from '../middleware/auth.js';
 import { prisma } from '../prisma/client.js';
 
 export interface LoginResult {
+  /** Token temporaneo firmato con ruolo='__PENDING__'.
+   *  Il client lo usa solo per chiamare POST /api/auth/select-role.
+   *  NON è valido per le route normali. */
+  pendingToken: string;
+  user: {
+    id: number;
+    username: string;
+    cognome: string;
+    nome: string;
+    ruoli: string[];          // tutti i ruoli disponibili per l'utente
+    aree: number[];
+    mustChangePwd: boolean;
+  };
+}
+
+export interface SessionResult {
+  /** Token JWT definitivo con il ruolo scelto — valido per le route normali. */
   token: string;
   user: {
     id: number;
@@ -16,13 +33,17 @@ export interface LoginResult {
 }
 
 /**
- * Autentica un utente e restituisce il token JWT.
- * Lancia un errore se le credenziali non sono valide.
+ * Fase 1 del login: verifica credenziali, restituisce un pending token
+ * con la lista dei ruoli disponibili. Se l'utente ha un solo ruolo,
+ * il client può saltare la selezione e chiamare direttamente select-role.
  */
 export async function login(username: string, password: string): Promise<LoginResult | null> {
   const utente = await prisma.utente.findUnique({
     where: { username },
-    include: { ruolo: true, utentiAree: true },
+    include: {
+      utentiRuoli: { include: { ruolo: true } },
+      utentiAree: true,
+    },
   });
 
   if (!utente || utente.stato === 'DISABILITATO') return null;
@@ -30,39 +51,91 @@ export async function login(username: string, password: string): Promise<LoginRe
   const match = await bcrypt.compare(password, utente.passwordHash);
   if (!match) return null;
 
-  const aree = utente.utentiAree.map((ua) => ua.areaId);
-  const payload: Omit<JwtPayload, 'iat' | 'exp'> = {
-    sub: utente.id,
-    username: utente.username,
-    ruolo: utente.ruolo.nome,
-    aree,
-  };
+  if (utente.utentiRuoli.length === 0) return null; // utente senza ruoli
 
-  const token = jwt.sign(payload, config.jwt.secret, { expiresIn: config.jwt.expiresIn });
-  return { 
-    token, 
-    user: { 
-      id: utente.id, 
-      username: utente.username, 
-      ruolo: utente.ruolo.nome, 
-      aree, 
-      mustChangePwd: utente.mustChangePwd 
-    } 
+  const ruoli = utente.utentiRuoli.map((ur) => ur.ruolo.nome);
+  const aree = utente.utentiAree.map((ua) => ua.areaId);
+
+  // Token temporaneo — non usabile per le route normali (ruolo='__PENDING__')
+  const pendingToken = jwt.sign(
+    { sub: utente.id, username: utente.username, ruolo: '__PENDING__', aree, ruoli },
+    config.jwt.secret,
+    { expiresIn: '5m' } // scade in 5 minuti — solo per la selezione
+  );
+
+  return {
+    pendingToken,
+    user: {
+      id: utente.id,
+      username: utente.username,
+      cognome: utente.cognome,
+      nome: utente.nome,
+      ruoli,
+      aree,
+      mustChangePwd: utente.mustChangePwd,
+    },
   };
 }
 
 /**
- * Genera uno username univoco nel formato: prima_lettera_nome + cognome (minuscolo).
- * In caso di collisione aggiunge suffisso numerico da 2 a 999.
+ * Fase 2 del login: riceve il pending token e il ruolo scelto,
+ * verifica che l'utente abbia quel ruolo, emette il JWT definitivo.
+ */
+export async function selectRole(pendingToken: string, ruoloScelto: string): Promise<SessionResult | null> {
+  let decoded: JwtPayload & { ruoli?: string[] };
+  try {
+    decoded = jwt.verify(pendingToken, config.jwt.secret) as unknown as JwtPayload & { ruoli?: string[] };
+  } catch {
+    return null;
+  }
+
+  if (decoded.ruolo !== '__PENDING__') return null; // non è un pending token
+
+  const ruoliDisponibili = decoded.ruoli ?? [];
+  if (!ruoliDisponibili.includes(ruoloScelto)) return null;
+
+  // Ricarica l'utente per avere lo stato aggiornato
+  const utente = await prisma.utente.findUnique({
+    where: { id: decoded.sub },
+    include: {
+      utentiAree: true,
+      utentiRuoli: { include: { ruolo: true } },
+    },
+  });
+
+  if (!utente || utente.stato === 'DISABILITATO') return null;
+
+  const aree = utente.utentiAree.map((ua) => ua.areaId);
+
+  const token = jwt.sign(
+    { sub: utente.id, username: utente.username, ruolo: ruoloScelto, aree },
+    config.jwt.secret,
+    { expiresIn: config.jwt.expiresIn }
+  );
+
+  return {
+    token,
+    user: {
+      id: utente.id,
+      username: utente.username,
+      ruolo: ruoloScelto,
+      aree,
+      mustChangePwd: utente.mustChangePwd,
+    },
+  };
+}
+
+/**
+ * Genera uno username base: prima_lettera_nome + cognome (minuscolo, solo alfanumerico).
+ * Esempio: nome="Mario", cognome="Rossi" → "mrossi"
  */
 export function generateUsername(nome: string, cognome: string): string {
-  const base = (nome.charAt(0) + cognome).toLowerCase().replace(/[^a-z0-9]/g, '');
-  return base;
+  return (nome.charAt(0) + cognome).toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
 /**
- * Valida che la password rispetti la policy:
- * - lunghezza 10-64
+ * Valida la policy della password:
+ * - 10–64 caratteri
  * - almeno 1 maiuscola
  * - almeno 1 carattere speciale
  */
@@ -73,9 +146,7 @@ export function validatePassword(password: string): boolean {
   return true;
 }
 
-/**
- * Genera una password temporanea casuale conforme alla policy.
- */
+/** Genera una password temporanea casuale conforme alla policy. */
 export function generateTempPassword(): string {
   const uppercase = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   const specials = '!@#$%^&*()_+-=[]{}|;:,.<>?';
@@ -87,18 +158,13 @@ export function generateTempPassword(): string {
   pwd += uppercase[Math.floor(Math.random() * uppercase.length)];
   pwd += specials[Math.floor(Math.random() * specials.length)];
   pwd += digits[Math.floor(Math.random() * digits.length)];
-
   for (let i = pwd.length; i < 12; i++) {
     pwd += all[Math.floor(Math.random() * all.length)];
   }
-
-  // Mischia
   return pwd.split('').sort(() => Math.random() - 0.5).join('');
 }
 
-/**
- * Hash una password con bcrypt usando il cost factor configurato.
- */
+/** Hash bcrypt con il cost factor configurato. */
 export async function hashPassword(password: string): Promise<string> {
   return bcrypt.hash(password, config.bcrypt.costFactor);
 }

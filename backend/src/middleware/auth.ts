@@ -3,10 +3,11 @@ import jwt from 'jsonwebtoken';
 import { config } from '../config/index.js';
 
 export interface JwtPayload {
-  sub: number;       // utenteId
+  sub: number;
   username: string;
-  ruolo: string;
-  aree: number[];    // areaId[] associati all'utente
+  ruolo: string;        // ruolo attivo in questa sessione
+  aree: number[];
+  ruoli?: string[];     // solo nel pending token (fase 1 login)
   iat?: number;
   exp?: number;
 }
@@ -21,9 +22,9 @@ declare global {
 
 /**
  * Middleware di verifica JWT.
- * Attach req.user se il token è valido; altrimenti 401.
- * Se la scadenza residua è < refreshThresholdMinutes, aggiunge un nuovo token
- * nell'header X-Renewed-Token.
+ * - Blocca i pending token (ruolo='__PENDING__') — non sono validi per le route normali.
+ * - Attacca req.user se il token è definitivo e valido.
+ * - Se scade tra meno di refreshThresholdMinutes, aggiunge X-Renewed-Token.
  */
 export function authenticate(req: Request, res: Response, next: NextFunction): void {
   const authHeader = req.headers['authorization'];
@@ -37,9 +38,16 @@ export function authenticate(req: Request, res: Response, next: NextFunction): v
 
   try {
     const payload = jwt.verify(token, config.jwt.secret) as unknown as JwtPayload;
+
+    // Blocca i pending token: non sono validi per le route normali
+    if (payload.ruolo === '__PENDING__') {
+      res.status(401).json({ error: 'Sessione non completata: seleziona un ruolo.' });
+      return;
+    }
+
     req.user = payload;
 
-    // Auto-refresh: se scade tra meno di refreshThresholdMinutes
+    // Auto-refresh
     if (payload.exp) {
       const remainingMin = (payload.exp - Math.floor(Date.now() / 1000)) / 60;
       if (remainingMin < config.jwt.refreshThresholdMinutes) {

@@ -38,6 +38,12 @@ export function attachWebSocketServer(server: Server): void {
       return;
     }
 
+    // Blocca i pending token — non sono validi per WebSocket
+    if (payload.ruolo === '__PENDING__') {
+      ws.close(4401, 'Token non valido');
+      return;
+    }
+
     // Iscrizione alle room
     const isMonitor = payload.ruolo === 'MONITOR';
     if (isMonitor) {
