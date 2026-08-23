@@ -13,7 +13,6 @@ export const config = {
 
   db: {
     url: required('DATABASE_URL'),
-  },
 
   // Legacy alias for backward compatibility
   database: {

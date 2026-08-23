@@ -174,6 +174,13 @@ export default function SuperAdminDashboard() {
 
   // Editing ruoli utente esistente
   const [editingRuoli, setEditingRuoli] = useState<{ utenteId: number; ruoli: string[] } | null>(null);
+  
+  // Editing aree utente
+  const [editingAree, setEditingAree] = useState<{ utenteId: number; aree: number[] } | null>(null);
+  
+  // Cambio password utente
+  const [changingPassword, setChangingPassword] = useState<{ utenteId: number; username: string } | null>(null);
+  const [newPasswordInput, setNewPasswordInput] = useState('');
 
   const loadUtenti = useCallback(async () => {
     setUtentiLoading(true);
@@ -247,6 +254,33 @@ export default function SuperAdminDashboard() {
     }
   };
 
+  const handleSalvaAree = async () => {
+    if (!editingAree) return;
+    setUtentiError('');
+    try {
+      await apiClient.patch(`/utenti/${editingAree.utenteId}`, { aree: editingAree.aree });
+      setEditingAree(null);
+      setUtentiSuccess('Aree aggiornate.');
+      loadUtenti();
+    } catch (err: any) {
+      setUtentiError(err?.response?.data?.error ?? 'Errore aggiornamento aree.');
+    }
+  };
+
+  const handleChangePassword = async () => {
+    if (!changingPassword || !newPasswordInput.trim()) return;
+    setUtentiError('');
+    try {
+      await apiClient.patch(`/utenti/${changingPassword.utenteId}`, { newPassword: newPasswordInput });
+      setChangingPassword(null);
+      setNewPasswordInput('');
+      setUtentiSuccess('Password cambiata.');
+      loadUtenti();
+    } catch (err: any) {
+      setUtentiError(err?.response?.data?.error ?? 'Errore cambio password.');
+    }
+  };
+
   const toggleRuoloNuovo = (ruolo: string) =>
     setNuovoUtente((prev) => ({
       ...prev,
@@ -270,6 +304,16 @@ export default function SuperAdminDashboard() {
       ruoli: prev!.ruoli.includes(ruolo)
         ? prev!.ruoli.filter((r) => r !== ruolo)
         : [...prev!.ruoli, ruolo],
+    }));
+  };
+
+  const toggleAreaEditing = (areaId: number) => {
+    if (!editingAree) return;
+    setEditingAree((prev) => ({
+      ...prev!,
+      aree: prev!.aree.includes(areaId)
+        ? prev!.aree.filter((a) => a !== areaId)
+        : [...prev!.aree, areaId],
     }));
   };
 
@@ -547,7 +591,7 @@ export default function SuperAdminDashboard() {
                   <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
                       <tr style={{ background: '#f5f5f5' }}>
-                        {['Username', 'Cognome Nome', 'Ruoli', 'Stato', 'Azioni'].map((h) => (
+                        {['Username', 'Cognome Nome', 'Ruoli', 'Aree', 'Stato', 'Azioni'].map((h) => (
                           <th key={h} style={thStyle}>{h}</th>
                         ))}
                       </tr>
@@ -557,6 +601,8 @@ export default function SuperAdminDashboard() {
                         <tr key={u.id} style={{ borderBottom: '1px solid #f0f0f0' }}>
                           <td style={tdStyle}><code>{u.username}</code></td>
                           <td style={tdStyle}>{u.cognome} {u.nome}</td>
+                          
+                          {/* Colonna Ruoli */}
                           <td style={tdStyle}>
                             {editingRuoli?.utenteId === u.id ? (
                               <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
@@ -574,13 +620,39 @@ export default function SuperAdminDashboard() {
                               </span>
                             )}
                           </td>
+                          
+                          {/* Colonna Aree */}
+                          <td style={tdStyle}>
+                            {editingAree?.utenteId === u.id ? (
+                              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                                {aree.map((a) => (
+                                  <label key={a.id} style={chipStyle(editingAree.aree.includes(a.id))}>
+                                    <input type="checkbox" checked={editingAree.aree.includes(a.id)}
+                                      onChange={() => toggleAreaEditing(a.id)} style={{ display: 'none' }} />
+                                    {a.prefisso}
+                                  </label>
+                                ))}
+                              </div>
+                            ) : (
+                              <span style={{ fontSize: 12, fontWeight: 600, color: '#555' }}>
+                                {u.utentiAree.map((ua) => {
+                                  const area = aree.find((a) => a.id === ua.areaId);
+                                  return area?.prefisso;
+                                }).filter(Boolean).join(', ')}
+                              </span>
+                            )}
+                          </td>
+                          
                           <td style={tdStyle}>
                             <span style={badgeStyle(u.stato === 'ATTIVO' ? 'green' : u.stato === 'PAUSA' ? 'yellow' : 'red')}>
                               {u.stato}
                             </span>
                           </td>
+                          
                           <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
                             <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                              
+                              {/* Bottoni Ruoli */}
                               {editingRuoli?.utenteId === u.id ? (
                                 <>
                                   <button onClick={handleSalvaRuoli} style={btnStyle('#22c55e', 'small')}>Salva</button>
@@ -594,6 +666,44 @@ export default function SuperAdminDashboard() {
                                   Ruoli
                                 </button>
                               )}
+                              
+                              {/* Bottoni Aree */}
+                              {editingAree?.utenteId === u.id ? (
+                                <>
+                                  <button onClick={handleSalvaAree} style={btnStyle('#22c55e', 'small')}>Salva</button>
+                                  <button onClick={() => setEditingAree(null)} style={btnStyle('#6b7280', 'small')}>Annulla</button>
+                                </>
+                              ) : (
+                                <button
+                                  onClick={() => setEditingAree({ utenteId: u.id, aree: u.utentiAree.map((ua) => ua.areaId) })}
+                                  style={btnStyle('#f59e0b', 'small')}
+                                >
+                                  Aree
+                                </button>
+                              )}
+                              
+                              {/* Password change */}
+                              {changingPassword?.utenteId === u.id ? (
+                                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                                  <input
+                                    type="password"
+                                    value={newPasswordInput}
+                                    onChange={(e) => setNewPasswordInput(e.target.value)}
+                                    placeholder="Nuova password..."
+                                    style={{ padding: '2px 6px', fontSize: 11, width: 120 }}
+                                  />
+                                  <button onClick={handleChangePassword} style={btnStyle('#22c55e', 'small')}>OK</button>
+                                  <button onClick={() => { setChangingPassword(null); setNewPasswordInput(''); }} style={btnStyle('#6b7280', 'small')}>✕</button>
+                                </div>
+                              ) : (
+                                <button
+                                  onClick={() => setChangingPassword({ utenteId: u.id, username: u.username })}
+                                  style={btnStyle('#3b82f6', 'small')}
+                                >
+                                  Cambia pwd
+                                </button>
+                              )}
+                              
                               <button onClick={() => handleResetPwd(u.id)} style={btnStyle('#6366f1', 'small')}>
                                 Reset pwd
                               </button>

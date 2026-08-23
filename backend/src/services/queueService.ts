@@ -29,13 +29,24 @@ export async function callNext(
     }),
   ]);
 
-  // Broadcast WebSocket
+  // Broadcast WebSocket per il numero chiamato
   broadcastAll(ticket.servizio.areaId, {
     type: 'NUMERO_CHIAMATO',
     ticket: ticket.numero,
     postazione,
     servizio: ticket.servizio.nome,
     timestamp: new Date().toISOString(),
+  });
+
+  // Broadcast WebSocket per l'aggiornamento della coda
+  const codaRimasta = await prisma.ticket.count({
+    where: { servizioId, stato: 'ATTESA' },
+  });
+
+  broadcastAll(ticket.servizio.areaId, {
+    type: 'CODA_AGGIORNATA',
+    servizioId,
+    count: codaRimasta,
   });
 
   return { chiamataId: chiamata.id, ticketNumero: ticket.numero, postazione };
@@ -48,6 +59,9 @@ export async function callNext(
 export async function cancelCall(chiamataId: number, utenteId: number): Promise<void> {
   const chiamata = await prisma.chiamata.findUnique({
     where: { id: chiamataId },
+    include: {
+      servizio: { include: { area: true } }
+    }
   });
   
   if (!chiamata || chiamata.utenteId !== utenteId) {
@@ -63,4 +77,17 @@ export async function cancelCall(chiamataId: number, utenteId: number): Promise<
         })]
       : []),
   ]);
+
+  // Broadcast WebSocket per l'aggiornamento della coda dopo l'annullamento
+  if (chiamata.ticketId) {
+    const codaAggiornata = await prisma.ticket.count({
+      where: { servizioId: chiamata.servizioId, stato: 'ATTESA' },
+    });
+
+    broadcastAll(chiamata.servizio.areaId, {
+      type: 'CODA_AGGIORNATA',
+      servizioId: chiamata.servizioId,
+      count: codaAggiornata,
+    });
+  }
 }

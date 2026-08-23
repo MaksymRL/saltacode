@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { authenticate, authorize } from '../middleware/auth.js';
 import { prisma } from '../prisma/client.js';
 import * as authService from '../services/authService.js';
+import * as wsService from '../services/wsService.js';
 
 const router = Router();
 
@@ -44,7 +45,7 @@ router.get('/', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res: Resp
 /**
  * POST /api/utenti
  * SUPERADMIN → può creare qualsiasi ruolo
- * ADMIN → solo OPERATORE nella propria area
+ * ADMIN → solo ACCOGLIENZA e OPERATORE nella propria area (NON può creare ADMIN/SUPERADMIN)
  *
  * Body: { cognome, nome, ruoli: string[], aree: number[] }
  * Response: { ...utente, tempPassword: string }
@@ -70,13 +71,13 @@ router.post('/', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res: Res
 
     const requester = req.user!;
 
-    // ADMIN: può creare ADMIN, ACCOGLIENZA e OPERATORE solo nella propria area
+    // ADMIN: può creare solo ACCOGLIENZA e OPERATORE nella propria area
     if (requester.ruolo === 'ADMIN') {
       const ruoliNonConsentiti = ruoliRichiesti!.filter(
-        (r) => !['ADMIN', 'ACCOGLIENZA', 'OPERATORE'].includes(r)
+        (r) => !['ACCOGLIENZA', 'OPERATORE'].includes(r)
       );
       if (ruoliNonConsentiti.length > 0) {
-        res.status(403).json({ error: "L'Admin può assegnare solo i ruoli ADMIN, ACCOGLIENZA e OPERATORE." });
+        res.status(403).json({ error: "L'Admin può assegnare solo i ruoli ACCOGLIENZA e OPERATORE." });
         return;
       }
       const areeNonAutorizzate = aree!.filter((a) => !requester.aree.includes(Number(a)));
@@ -141,9 +142,9 @@ router.post('/', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res: Res
 /**
  * PATCH /api/utenti/:id
  * SUPERADMIN → qualsiasi utente
- * ADMIN → solo utenti della propria area
+ * ADMIN → solo utenti della propria area (non può modificare ADMIN/SUPERADMIN)
  *
- * Body: { cognome?, nome?, stato?, aree?, ruoli?: string[], resetPassword?: true }
+ * Body: { cognome?, nome?, stato?, aree?, ruoli?: string[], resetPassword?: true, newPassword?: string }
  */
 router.patch('/:id', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -155,16 +156,30 @@ router.patch('/:id', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res:
 
     const requester = req.user!;
 
-    // ADMIN: solo utenti della propria area
+    // Carica l'utente target con ruoli
+    const target = await prisma.utente.findUnique({
+      where: { id },
+      include: { 
+        utentiAree: true,
+        utentiRuoli: { include: { ruolo: true } }
+      },
+    });
+    if (!target) {
+      res.status(404).json({ error: 'Utente non trovato.' });
+      return;
+    }
+
+    const targetRuoli = target.utentiRuoli.map((ur) => ur.ruolo.nome);
+    
+    // ADMIN: controlli di permessi più restrittivi
     if (requester.ruolo === 'ADMIN') {
-      const target = await prisma.utente.findUnique({
-        where: { id },
-        include: { utentiAree: true },
-      });
-      if (!target) {
-        res.status(404).json({ error: 'Utente non trovato.' });
+      // Non può modificare utenti con ruolo ADMIN o SUPERADMIN
+      if (targetRuoli.includes('ADMIN') || targetRuoli.includes('SUPERADMIN')) {
+        res.status(403).json({ error: 'Non autorizzato a modificare utenti Admin o SuperAdmin.' });
         return;
       }
+      
+      // Solo utenti della propria area
       const targetAree = target.utentiAree.map((ua) => ua.areaId);
       if (!targetAree.some((a) => requester.aree.includes(a))) {
         res.status(403).json({ error: 'Non autorizzato a modificare questo utente.' });
@@ -172,14 +187,23 @@ router.patch('/:id', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res:
       }
     }
 
-    const { cognome, nome, stato, aree, ruoli: nuoviRuoli, resetPassword } = req.body as {
+    const { cognome, nome, stato, aree, ruoli: nuoviRuoli, resetPassword, newPassword } = req.body as {
       cognome?: string;
       nome?: string;
       stato?: string;
       aree?: number[];
       ruoli?: string[];
       resetPassword?: boolean;
+      newPassword?: string;
     };
+
+    // ADMIN: non può assegnare ruoli ADMIN o SUPERADMIN
+    if (requester.ruolo === 'ADMIN' && nuoviRuoli) {
+      if (nuoviRuoli.includes('ADMIN') || nuoviRuoli.includes('SUPERADMIN')) {
+        res.status(403).json({ error: 'Admin non può assegnare ruoli Admin o SuperAdmin.' });
+        return;
+      }
+    }
 
     const data: Record<string, unknown> = {};
     if (cognome !== undefined) data['cognome'] = cognome.trim();
@@ -194,15 +218,37 @@ router.patch('/:id', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res:
     }
 
     let tempPassword: string | undefined;
+    
+    // Reset password automatico
     if (resetPassword) {
       tempPassword = authService.generateTempPassword();
       data['passwordHash'] = await authService.hashPassword(tempPassword);
       data['mustChangePwd'] = true;
     }
+    
+    // Cambio password specifica da parte dell'Admin/SuperAdmin
+    if (newPassword) {
+      if (!authService.validatePassword(newPassword)) {
+        res.status(400).json({
+          error: 'La nuova password non rispetta la policy: minimo 10 caratteri, 1 maiuscola, 1 carattere speciale.',
+        });
+        return;
+      }
+      data['passwordHash'] = await authService.hashPassword(newPassword);
+      data['mustChangePwd'] = false; // Se l'admin imposta una password specifica, non forza il cambio
+    }
 
     const utente = await prisma.$transaction(async (tx) => {
       // Aggiorna aree se fornite
       if (aree !== undefined) {
+        // ADMIN: può assegnare solo alle proprie aree
+        if (requester.ruolo === 'ADMIN') {
+          const areeNonAutorizzate = aree.filter((a) => !requester.aree.includes(Number(a)));
+          if (areeNonAutorizzate.length > 0) {
+            throw new Error('Non autorizzato ad assegnare utenti a queste aree.');
+          }
+        }
+        
         await tx.utenteArea.deleteMany({ where: { utenteId: id } });
         await tx.utenteArea.createMany({
           data: aree.map((areaId) => ({ utenteId: id, areaId: Number(areaId) })),
@@ -212,6 +258,9 @@ router.patch('/:id', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res:
       // Aggiorna ruoli se forniti
       if (nuoviRuoli !== undefined) {
         const ruoliDB = await tx.ruolo.findMany({ where: { nome: { in: nuoviRuoli } } });
+        if (ruoliDB.length !== nuoviRuoli.length) {
+          throw new Error('Uno o più ruoli non validi.');
+        }
         await tx.utenteRuolo.deleteMany({ where: { utenteId: id } });
         await tx.utenteRuolo.createMany({
           data: ruoliDB.map((r) => ({ utenteId: id, ruoloId: r.id })),
@@ -225,10 +274,33 @@ router.patch('/:id', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res:
       });
     });
 
+    // Se lo stato è cambiato, invia broadcast WebSocket
+    if (stato && target.stato !== stato) {
+      // Trova le aree dell'utente per il broadcast
+      const utenteAree = utente.utentiAree.map((ua) => ua.areaId);
+      const isOperatore = utente.utentiRuoli.some((ur) => ur.ruolo.nome === 'OPERATORE');
+      
+      if (isOperatore) {
+        // Invia aggiornamento stato operatore a tutte le aree dell'utente
+        utenteAree.forEach((areaId) => {
+          wsService.broadcastAll(areaId, {
+            type: 'STATO_OPERATORE',
+            utenteId: utente.id,
+            username: utente.username,
+            stato: stato as 'ATTIVO' | 'PAUSA' | 'DISABILITATO',
+          });
+        });
+      }
+    }
+
     res.json(tempPassword ? { ...sanitize(utente), tempPassword } : sanitize(utente));
   } catch (err: any) {
     if (err?.code === 'P2025') {
       res.status(404).json({ error: 'Utente non trovato.' });
+      return;
+    }
+    if (err?.message) {
+      res.status(400).json({ error: err.message });
       return;
     }
     next(err);

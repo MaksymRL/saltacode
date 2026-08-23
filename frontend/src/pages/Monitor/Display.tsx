@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
+import '../../styles/classic.css';
 
 interface ChiamataEntry {
   ticket: string;
@@ -66,7 +67,7 @@ export default function MonitorDisplay() {
       try {
         const msg = JSON.parse(event.data as string) as { type: string; [key: string]: unknown };
 
-        if (msg.type === 'NUMERO_CHIAMATO') {
+        if (msg.type === 'NUMERO_CHIAMATO' || msg.type === 'NUMERO_RICHIAMATO') {
           const entry: ChiamataEntry = {
             ticket: msg['ticket'] as string,
             servizio: msg['servizio'] as string,
@@ -74,13 +75,15 @@ export default function MonitorDisplay() {
             timestamp: msg['timestamp'] as string,
           };
           setCurrent(entry);
-          setHistory((prev) => [entry, ...prev].slice(0, 10));
-          announce(entry);
+          setHistory((prev) => [entry, ...prev].slice(0, 20)); // Mantieni fino a 20 elementi
+          if (msg.type === 'NUMERO_CHIAMATO') {
+            announce(entry);
+          }
         }
 
         if (msg.type === 'INITIAL_STATE') {
           const ultimi = (msg['ultimiChiamati'] as ChiamataEntry[] | undefined) ?? [];
-          setHistory(ultimi);
+          setHistory(ultimi.slice(0, 20)); // Mantieni fino a 20 elementi
           if (ultimi.length > 0) setCurrent(ultimi[0] ?? null);
         }
       } catch {
@@ -111,80 +114,201 @@ export default function MonitorDisplay() {
   }, [connect]);
 
   return (
-    <div style={{ display: 'flex', height: '100vh', background: '#0a0a0a', color: 'white', fontFamily: 'sans-serif', overflow: 'hidden' }}>
+    <div style={{ 
+      display: 'flex', 
+      height: '100vh', 
+      background: 'white',
+      fontFamily: 'Tahoma, Helvetica, sans-serif',
+      overflow: 'hidden' 
+    }}>
 
-      {/* Pannello sinistro — cronologia */}
-      <aside style={{ width: 280, background: '#111', padding: 16, overflowY: 'auto', borderRight: '1px solid #1f1f1f', flexShrink: 0 }}>
-        <h3 style={{ margin: '0 0 16px', fontSize: 12, textTransform: 'uppercase', letterSpacing: 2, color: '#555' }}>
-          Ultimi chiamati
-        </h3>
-        {history.length === 0 && (
-          <p style={{ color: '#333', fontSize: 13 }}>Nessuna chiamata oggi.</p>
-        )}
-        {history.map((h, i) => (
-          <div
-            key={i}
-            style={{
-              padding: '10px 12px',
-              marginBottom: 8,
-              background: i === 0 ? '#1a1a2e' : '#161616',
-              borderRadius: 6,
-              borderLeft: `3px solid ${i === 0 ? '#6c63ff' : '#2a2a2a'}`,
-              transition: 'background 0.3s',
-            }}
-          >
-            <div style={{ fontSize: 24, fontWeight: 'bold', letterSpacing: 2 }}>{h.ticket}</div>
-            <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>{h.servizio}</div>
-            <div style={{ fontSize: 11, color: '#555', marginTop: 2 }}>
-              Post. {h.postazione} · {new Date(h.timestamp).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-            </div>
-          </div>
-        ))}
-      </aside>
+      {/* Pannello sinistro — primi 3 numeri in grande (70%) */}
+      <div style={{ 
+        width: '70%', 
+        borderRight: '2px solid black',
+        display: 'flex',
+        flexDirection: 'column'
+      }}>
+        <table style={{ width: '100%', height: '100%', borderCollapse: 'collapse' }}>
+          <tbody>
+            {/* Posizione 0 - Numero corrente (rosso, più grande) */}
+            <tr style={{ height: '140px' }}>
+              <td className="posCommon pos0Service" style={{ textAlign: 'center', borderBottom: '1px solid black' }}>
+                {history[0]?.servizio || ''}
+              </td>
+            </tr>
+            <tr style={{ height: '140px' }}>
+              <td className="posCommon pos0Number" style={{ textAlign: 'center', borderBottom: '1px solid black' }}>
+                {history[0]?.ticket || ''}
+              </td>
+            </tr>
+            <tr style={{ height: '80px', borderBottom: '3px solid black' }}>
+              <td className="posCommon pos0Post" style={{ textAlign: 'center' }}>
+                {history[0] ? `Postazione ${history[0].postazione}` : ''}
+              </td>
+            </tr>
 
-      {/* Area centrale — numero corrente */}
-      <main style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', padding: 32 }}>
-        {current ? (
-          <>
-            <div style={{ fontSize: 13, textTransform: 'uppercase', letterSpacing: 6, color: '#555', marginBottom: 12 }}>
-              {current.servizio}
-            </div>
-            <div style={{
-              fontSize: 'clamp(6rem, 22vw, 16rem)',
-              fontWeight: 900,
-              letterSpacing: '0.05em',
-              color: '#6c63ff',
-              lineHeight: 1,
-              textShadow: '0 0 80px rgba(108,99,255,0.3)',
-            }}>
-              {current.ticket}
-            </div>
-            <div style={{ fontSize: 20, color: '#666', marginTop: 20 }}>
-              Postazione <strong style={{ color: '#ccc', fontSize: 28 }}>{current.postazione}</strong>
-            </div>
-          </>
-        ) : (
-          <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: 64, marginBottom: 16 }}>🎫</div>
-            <div style={{ fontSize: 20, color: '#333' }}>In attesa di chiamate…</div>
-          </div>
-        )}
-      </main>
+            {/* Posizione 1 - Secondo numero (verde, medio) */}
+            <tr style={{ height: '80px' }}>
+              <td className="posCommon pos2Service" style={{ textAlign: 'center' }}>
+                {history[1]?.servizio || ''}
+              </td>
+            </tr>
+            <tr style={{ height: '80px' }}>
+              <td className="posCommon pos2Number" style={{ textAlign: 'center' }}>
+                {history[1]?.ticket || ''}
+              </td>
+            </tr>
+            <tr style={{ height: '80px', borderBottom: '1px solid black' }}>
+              <td className="posCommon pos2Post" style={{ textAlign: 'center' }}>
+                {history[1] ? `Postazione ${history[1].postazione}` : ''}
+              </td>
+            </tr>
 
-      {/* Orologio in alto a destra */}
-      <Clock />
+            {/* Posizione 2 - Terzo numero (blu, medio-piccolo) */}
+            <tr style={{ height: '70px' }}>
+              <td className="posCommon pos3Service" style={{ textAlign: 'center' }}>
+                {history[2]?.servizio || ''}
+              </td>
+            </tr>
+            <tr style={{ height: '70px' }}>
+              <td className="posCommon pos3Number" style={{ textAlign: 'center' }}>
+                {history[2]?.ticket || ''}
+              </td>
+            </tr>
+            <tr style={{ height: '70px' }}>
+              <td className="posCommon pos3Post" style={{ textAlign: 'center' }}>
+                {history[2] ? `Postazione ${history[2].postazione}` : ''}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
-      {/* Indicatori stato in basso a destra */}
-      <div style={{ position: 'fixed', bottom: 16, right: 16, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+      {/* Pannello destro — tabella cronologia (30%) */}
+      <div style={{ width: '30%', padding: '20px 0' }}>
+        <table style={{ 
+          width: '100%', 
+          borderCollapse: 'collapse',
+          marginTop: '15px'
+        }}>
+          <thead>
+            <tr>
+              <th className="posCommon posHeaderService" style={{ textAlign: 'left' }}>SERVIZIO</th>
+              <th className="posCommon posHeaderNumber" style={{ textAlign: 'center' }}>NUMERO</th>  
+              <th className="posCommon posHeaderPost" style={{ textAlign: 'center' }}>POST</th>
+              <th className="posCommon posHeaderPost" style={{ textAlign: 'right' }}>ORA</th>
+            </tr>
+          </thead>
+          <tbody>
+            {/* Prime 3 chiamate con colori speciali */}
+            {history.slice(0, 3).map((entry, index) => (
+              <tr key={index}>
+                <td 
+                  className="posCommon pos4Service" 
+                  style={{ 
+                    textAlign: 'left',
+                    color: index === 0 ? 'red' : index === 1 ? 'green' : 'blue'
+                  }}
+                >
+                  {entry.servizio}
+                </td>
+                <td 
+                  className="posCommon pos4Number" 
+                  style={{ 
+                    textAlign: 'center',
+                    color: index === 0 ? 'red' : index === 1 ? 'green' : 'blue'
+                  }}
+                >
+                  {entry.ticket}
+                </td>
+                <td 
+                  className="posCommon pos4Post" 
+                  style={{ 
+                    textAlign: 'center',
+                    color: index === 0 ? 'red' : index === 1 ? 'green' : 'blue'
+                  }}
+                >
+                  {entry.postazione}
+                </td>
+                <td 
+                  className="posDate" 
+                  style={{ 
+                    textAlign: 'right',
+                    color: index === 0 ? 'red' : index === 1 ? 'green' : 'blue'
+                  }}
+                >
+                  {new Date(entry.timestamp).toLocaleTimeString('it-IT', { 
+                    hour: '2-digit', 
+                    minute: '2-digit' 
+                  })}
+                </td>
+              </tr>
+            ))}
+
+            {/* Resto della cronologia (fino a 20 totali) */}
+            {history.slice(3, 20).map((entry, index) => (
+              <tr key={index + 3} className={index % 2 === 1 ? 'posAlternativeColor' : ''}>
+                <td className="posCommon pos4Service" style={{ textAlign: 'left' }}>
+                  {entry.servizio}
+                </td>
+                <td className="posCommon pos4Number" style={{ textAlign: 'center' }}>
+                  {entry.ticket}
+                </td>
+                <td className="posCommon pos4Post" style={{ textAlign: 'center' }}>
+                  {entry.postazione}
+                </td>
+                <td className="posDate" style={{ textAlign: 'right' }}>
+                  {new Date(entry.timestamp).toLocaleTimeString('it-IT', { 
+                    hour: '2-digit', 
+                    minute: '2-digit' 
+                  })}
+                </td>
+              </tr>
+            ))}
+
+            {/* Righe vuote per completare la tabella se necessario */}
+            {Array.from({ length: Math.max(0, 17 - history.length) }, (_, index) => (
+              <tr key={`empty-${index}`} className={index % 2 === 1 ? 'posAlternativeColor' : ''}>
+                <td className="posCommon pos4Service" style={{ textAlign: 'left' }}>&nbsp;</td>
+                <td className="posCommon pos4Number" style={{ textAlign: 'center' }}>&nbsp;</td>
+                <td className="posCommon pos4Post" style={{ textAlign: 'center' }}>&nbsp;</td>
+                <td className="posDate" style={{ textAlign: 'right' }}>&nbsp;</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        {/* Indicatori stato in basso */}
+        <div style={{ 
+          position: 'fixed', 
+          bottom: '10px', 
+          right: '10px', 
+          fontSize: '11px',
+          color: connected ? '#22c55e' : '#ef4444'
+        }}>
+          {connected ? '● CONNESSO' : '● RICONNESSIONE…'}
+        </div>
+
+        {/* Avviso audio se non supportato */}
         {!ttsSupported && (
-          <div style={{ background: '#f59e0b', color: '#000', padding: '4px 10px', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>
+          <div style={{ 
+            position: 'fixed', 
+            bottom: '30px', 
+            right: '10px',
+            background: '#f59e0b',
+            color: '#000',
+            padding: '4px 8px',
+            fontSize: '11px',
+            fontWeight: 'bold'
+          }}>
             ⚠ Audio non disponibile
           </div>
         )}
-        <div style={{ fontSize: 11, color: connected ? '#22c55e' : '#ef4444', letterSpacing: 1 }}>
-          {connected ? '● CONNESSO' : '● RICONNESSIONE…'}
-        </div>
       </div>
+
+      {/* Orologio in alto a destra */}
+      <Clock />
     </div>
   );
 }
@@ -200,8 +324,14 @@ function Clock() {
 
   return (
     <div style={{
-      position: 'fixed', top: 16, right: 20,
-      fontFamily: 'monospace', fontSize: 22, color: '#444', letterSpacing: 2,
+      position: 'fixed', 
+      top: '16px', 
+      right: '20px',
+      fontFamily: 'monospace', 
+      fontSize: '22px', 
+      color: '#000',  // Nero per il background bianco
+      letterSpacing: '2px',
+      fontWeight: 'bold'
     }}>
       {time.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
     </div>
