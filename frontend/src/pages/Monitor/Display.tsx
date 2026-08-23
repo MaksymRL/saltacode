@@ -19,6 +19,7 @@ interface ChiamataEntry {
  * TTS: annuncia il numero chiamato tramite Web Speech API
  */
 export default function MonitorDisplay() {
+  const [current, setCurrent] = useState<ChiamataEntry | null>(null);
   const [history, setHistory] = useState<ChiamataEntry[]>([]);
   const [connected, setConnected] = useState(false);
   const [ttsSupported] = useState('speechSynthesis' in window);
