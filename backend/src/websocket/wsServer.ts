@@ -20,7 +20,7 @@ import { prisma } from '../prisma/client.js';
 export function attachWebSocketServer(server: Server): void {
   const wss = new WebSocketServer({ server, path: '/ws' });
 
-  wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
+  wss.on('connection', async (ws: WebSocket, req: IncomingMessage) => {
     // Estrai token dalla query string
     const url = new URL(req.url ?? '', 'http://localhost');
     const token = url.searchParams.get('token');
