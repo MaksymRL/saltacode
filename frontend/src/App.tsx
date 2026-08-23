@@ -1,5 +1,6 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { useEffect } from 'react';
 import Login from './pages/Login';
 import SelectRole from './pages/SelectRole';
 import ChangePassword from './pages/ChangePassword';
@@ -36,19 +37,32 @@ function PrivateRoute({ children, ruoli }: { children: React.ReactNode; ruoli?: 
 
 function AppRoutes() {
   const { isAuthenticated, isPending, user } = useAuth();
+  const navigate = useNavigate();
+
+  const dashboardByRole: Record<string, string> = {
+    SUPERADMIN: '/superadmin',
+    ADMIN: '/admin',
+    ACCOGLIENZA: '/accoglienza',
+    OPERATORE: '/operatore',
+  };
+
+  // Quando il ruolo cambia (switch-role), reindirizza alla dashboard corretta
+  useEffect(() => {
+    if (isAuthenticated && user && !user.mustChangePwd) {
+      const target = dashboardByRole[user.ruolo];
+      if (target && !window.location.pathname.startsWith(target)) {
+        navigate(target, { replace: true });
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.ruolo]);
 
   // Calcola dove mandare l'utente dalla root
   const homePath = (() => {
     if (isPending) return '/select-role';
     if (!isAuthenticated || !user) return '/login';
     if (user.mustChangePwd) return '/change-password';
-    const map: Record<string, string> = {
-      SUPERADMIN: '/superadmin',
-      ADMIN: '/admin',
-      ACCOGLIENZA: '/accoglienza',
-      OPERATORE: '/operatore',
-    };
-    return map[user.ruolo] ?? '/login';
+    return dashboardByRole[user.ruolo] ?? '/login';
   })();
 
   return (

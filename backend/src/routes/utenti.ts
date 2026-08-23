@@ -70,11 +70,13 @@ router.post('/', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res: Res
 
     const requester = req.user!;
 
-    // ADMIN: solo OPERATORE, solo nella propria area
+    // ADMIN: può creare ADMIN, ACCOGLIENZA e OPERATORE solo nella propria area
     if (requester.ruolo === 'ADMIN') {
-      const ruoliNonConsentiti = ruoliRichiesti!.filter((r) => r !== 'OPERATORE');
+      const ruoliNonConsentiti = ruoliRichiesti!.filter(
+        (r) => !['ADMIN', 'ACCOGLIENZA', 'OPERATORE'].includes(r)
+      );
       if (ruoliNonConsentiti.length > 0) {
-        res.status(403).json({ error: "L'Admin può assegnare solo il ruolo OPERATORE." });
+        res.status(403).json({ error: "L'Admin può assegnare solo i ruoli ADMIN, ACCOGLIENZA e OPERATORE." });
         return;
       }
       const areeNonAutorizzate = aree!.filter((a) => !requester.aree.includes(Number(a)));

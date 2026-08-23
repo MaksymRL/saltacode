@@ -52,6 +52,8 @@ export default function SelectRole() {
         ruolo,
       });
       const { token, user: loggedUser } = res.data;
+      // Salva tutti i ruoli disponibili per il cambio ruolo in sessione
+      localStorage.setItem('saltacode_ruoli', JSON.stringify(user.ruoli));
       login(loggedUser, token);
 
       // Redirect in base al ruolo scelto

@@ -10,7 +10,7 @@ interface Servizio {
   attivo: boolean;
   areaId: number;
   area: { id: number; nome: string; prefisso: string };
-  _count: { ticket: number }; // ticket in ATTESA
+  _count: { ticket: number };
 }
 
 interface Utente {
@@ -19,7 +19,8 @@ interface Utente {
   cognome: string;
   nome: string;
   stato: string;
-  ruolo: { id: number; nome: string };
+  mustChangePwd: boolean;
+  utentiRuoli: { ruolo: { id: number; nome: string } }[];
   utentiAree: { areaId: number }[];
 }
 
@@ -29,11 +30,38 @@ interface CodaState {
   count: number;
 }
 
-type Tab = 'code' | 'servizi' | 'operatori';
+type Tab = 'code' | 'servizi' | 'utenti';
+
+// Ruoli che un Admin può assegnare agli utenti della propria area
+const RUOLI_ADMIN = ['ADMIN', 'ACCOGLIENZA', 'OPERATORE'];
 
 export default function AdminDashboard() {
-  const { user, logout } = useAuth();
+  const { user, login, logout } = useAuth();
   const [tab, setTab] = useState<Tab>('code');
+
+  // ── Switch ruolo ──────────────────────────────────────────────────────────
+  const [ruoliDisponibili, setRuoliDisponibili] = useState<string[]>(['ADMIN']);
+  const [switchingRole, setSwitchingRole] = useState(false);
+
+  useEffect(() => {
+    const stored = localStorage.getItem('saltacode_ruoli');
+    if (stored) {
+      try { setRuoliDisponibili(JSON.parse(stored)); } catch { /* ignore */ }
+    }
+  }, []);
+
+  const handleSwitchRole = async (ruolo: string) => {
+    if (ruolo === user?.ruolo) return;
+    setSwitchingRole(true);
+    try {
+      const res = await apiClient.post<{ token: string; user: typeof user }>('/auth/switch-role', { ruolo });
+      if (res.data.user && res.data.token) {
+        login(res.data.user as any, res.data.token);
+      }
+    } catch { /* ignore */ } finally {
+      setSwitchingRole(false);
+    }
+  };
 
   // ── Servizi ───────────────────────────────────────────────────────────────
   const [servizi, setServizi] = useState<Servizio[]>([]);
@@ -57,58 +85,6 @@ export default function AdminDashboard() {
     loadServizi();
   }, [loadServizi]);
 
-  // ── Operatori ─────────────────────────────────────────────────────────────
-  const [operatori, setOperatori] = useState<Utente[]>([]);
-  const [operatoriLoading, setOperatoriLoading] = useState(false);
-  const [operatoriError, setOperatoriError] = useState('');
-  const [nuovoOp, setNuovoOp] = useState({ cognome: '', nome: '' });
-  const [tempPwd, setTempPwd] = useState<{ username: string; pwd: string } | null>(null);
-
-  const loadOperatori = useCallback(async () => {
-    setOperatoriLoading(true);
-    try {
-      const res = await apiClient.get<Utente[]>('/utenti');
-      setOperatori(res.data.filter((u) => u.ruolo.nome === 'OPERATORE'));
-    } catch {
-      setOperatoriError('Errore nel caricamento operatori.');
-    } finally {
-      setOperatoriLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (tab === 'operatori') loadOperatori();
-  }, [tab, loadOperatori]);
-
-  // ── Code real-time via WebSocket ──────────────────────────────────────────
-  const [code, setCode] = useState<CodaState[]>([]);
-
-  const handleWsMessage = useCallback((msg: { type: string; [key: string]: unknown }) => {
-    if (msg.type === 'INITIAL_STATE') {
-      setCode((msg['code'] as CodaState[]) ?? []);
-    }
-    if (msg.type === 'TICKET_EMESSO') {
-      const { servizioId, coda } = msg as unknown as { servizioId: number; coda: number };
-      setCode((prev) => {
-        const existing = prev.find((c) => c.servizioId === servizioId);
-        if (existing) {
-          return prev.map((c) => c.servizioId === servizioId ? { ...c, count: coda } : c);
-        }
-        const s = servizi.find((s) => s.id === servizioId);
-        return [...prev, { servizioId, nomeServizio: s?.nome ?? '?', count: coda }];
-      });
-    }
-    if (msg.type === 'NUMERO_CHIAMATO') {
-      const { servizioId } = msg as unknown as { servizioId: number };
-      setCode((prev) =>
-        prev.map((c) => c.servizioId === servizioId ? { ...c, count: Math.max(0, c.count - 1) } : c)
-      );
-    }
-  }, [servizi]);
-
-  useWebSocket({ onMessage: handleWsMessage });
-
-  // ── Crea Servizio ─────────────────────────────────────────────────────────
   const handleCreaServizio = async (e: React.FormEvent) => {
     e.preventDefault();
     setServiziError('');
@@ -136,58 +112,166 @@ export default function AdminDashboard() {
     }
   };
 
-  // ── Crea Operatore ────────────────────────────────────────────────────────
-  const handleCreaOperatore = async (e: React.FormEvent) => {
+  // ── Utenti dell'area ──────────────────────────────────────────────────────
+  const [utenti, setUtenti] = useState<Utente[]>([]);
+  const [utentiLoading, setUtentiLoading] = useState(false);
+  const [utentiError, setUtentiError] = useState('');
+  const [utentiSuccess, setUtentiSuccess] = useState('');
+  const [tempPwd, setTempPwd] = useState<{ username: string; pwd: string } | null>(null);
+
+  // Nuovo utente
+  const [nuovoUtente, setNuovoUtente] = useState({
+    cognome: '', nome: '', ruoliSelezionati: ['OPERATORE'] as string[],
+  });
+
+  // Editing ruoli utente esistente
+  const [editingRuoli, setEditingRuoli] = useState<{ utenteId: number; ruoli: string[] } | null>(null);
+
+  const loadUtenti = useCallback(async () => {
+    setUtentiLoading(true);
+    try {
+      const res = await apiClient.get<Utente[]>('/utenti');
+      // Mostra tutti gli utenti dell'area (non solo operatori)
+      setUtenti(res.data);
+    } catch (err: any) {
+      setUtentiError(err?.response?.data?.error ?? 'Errore nel caricamento utenti.');
+    } finally {
+      setUtentiLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (tab === 'utenti') loadUtenti();
+  }, [tab, loadUtenti]);
+
+  const handleCreaUtente = async (e: React.FormEvent) => {
     e.preventDefault();
-    setOperatoriError('');
-    setTempPwd(null);
+    setUtentiError(''); setUtentiSuccess(''); setTempPwd(null);
     try {
       const areaId = user?.aree[0];
-      if (!areaId) { setOperatoriError('Nessuna area assegnata.'); return; }
-      // Recupera l'id del ruolo OPERATORE dalla lista utenti già caricata
-      // oppure usa l'endpoint (ruoloId=4 è OPERATORE per convenzione del seed,
-      // ma lo inviamo come nome e il backend valida)
+      if (!areaId) { setUtentiError('Nessuna area assegnata.'); return; }
       const res = await apiClient.post<Utente & { tempPassword: string }>('/utenti', {
-        cognome: nuovoOp.cognome,
-        nome: nuovoOp.nome,
-        ruoloId: 4, // OPERATORE — hardcoded perché l'Admin può creare solo operatori
+        cognome: nuovoUtente.cognome,
+        nome: nuovoUtente.nome,
+        ruoli: nuovoUtente.ruoliSelezionati,
         aree: [areaId],
       });
       setTempPwd({ username: res.data.username, pwd: res.data.tempPassword });
-      setNuovoOp({ cognome: '', nome: '' });
-      loadOperatori();
+      setNuovoUtente({ cognome: '', nome: '', ruoliSelezionati: ['OPERATORE'] });
+      loadUtenti();
     } catch (err: any) {
-      setOperatoriError(err?.response?.data?.error ?? 'Errore creazione operatore.');
+      setUtentiError(err?.response?.data?.error ?? 'Errore creazione utente.');
     }
   };
 
-  const handleToggleOperatore = async (u: Utente) => {
+  const handleResetPwd = async (utenteId: number) => {
+    setUtentiError(''); setUtentiSuccess(''); setTempPwd(null);
+    try {
+      const res = await apiClient.patch<Utente & { tempPassword: string }>(`/utenti/${utenteId}`, { resetPassword: true });
+      setTempPwd({ username: '', pwd: res.data.tempPassword });
+      setUtentiSuccess('Password resettata.');
+    } catch (err: any) {
+      setUtentiError(err?.response?.data?.error ?? 'Errore reset password.');
+    }
+  };
+
+  const handleToggleUtente = async (u: Utente) => {
     const nuovoStato = u.stato === 'DISABILITATO' ? 'ATTIVO' : 'DISABILITATO';
     try {
       await apiClient.patch(`/utenti/${u.id}`, { stato: nuovoStato });
-      loadOperatori();
+      loadUtenti();
     } catch (err: any) {
-      setOperatoriError(err?.response?.data?.error ?? 'Errore.');
+      setUtentiError(err?.response?.data?.error ?? 'Errore.');
     }
   };
+
+  const handleSalvaRuoli = async () => {
+    if (!editingRuoli) return;
+    setUtentiError('');
+    try {
+      await apiClient.patch(`/utenti/${editingRuoli.utenteId}`, { ruoli: editingRuoli.ruoli });
+      setEditingRuoli(null);
+      setUtentiSuccess('Ruoli aggiornati.');
+      loadUtenti();
+    } catch (err: any) {
+      setUtentiError(err?.response?.data?.error ?? 'Errore aggiornamento ruoli.');
+    }
+  };
+
+  const toggleRuoloNuovo = (ruolo: string) =>
+    setNuovoUtente((prev) => ({
+      ...prev,
+      ruoliSelezionati: prev.ruoliSelezionati.includes(ruolo)
+        ? prev.ruoliSelezionati.filter((r) => r !== ruolo)
+        : [...prev.ruoliSelezionati, ruolo],
+    }));
+
+  const toggleRuoloEditing = (ruolo: string) => {
+    if (!editingRuoli) return;
+    setEditingRuoli((prev) => ({
+      ...prev!,
+      ruoli: prev!.ruoli.includes(ruolo)
+        ? prev!.ruoli.filter((r) => r !== ruolo)
+        : [...prev!.ruoli, ruolo],
+    }));
+  };
+
+  // ── Code real-time via WebSocket ──────────────────────────────────────────
+  const [code, setCode] = useState<CodaState[]>([]);
+
+  const handleWsMessage = useCallback((msg: { type: string; [key: string]: unknown }) => {
+    if (msg.type === 'INITIAL_STATE') {
+      setCode((msg['code'] as CodaState[]) ?? []);
+    }
+    if (msg.type === 'TICKET_EMESSO') {
+      const { servizioId, coda } = msg as unknown as { servizioId: number; coda: number };
+      setCode((prev) => {
+        const existing = prev.find((c) => c.servizioId === servizioId);
+        if (existing) return prev.map((c) => c.servizioId === servizioId ? { ...c, count: coda } : c);
+        const s = servizi.find((sv) => sv.id === servizioId);
+        return [...prev, { servizioId, nomeServizio: s?.nome ?? '?', count: coda }];
+      });
+    }
+    if (msg.type === 'NUMERO_CHIAMATO') {
+      const { servizioId } = msg as unknown as { servizioId: number };
+      setCode((prev) =>
+        prev.map((c) => c.servizioId === servizioId ? { ...c, count: Math.max(0, c.count - 1) } : c)
+      );
+    }
+  }, [servizi]);
+
+  useWebSocket({ onMessage: handleWsMessage });
 
   // ── Render ────────────────────────────────────────────────────────────────
   const tabs: { id: Tab; label: string }[] = [
     { id: 'code', label: '📊 Code in tempo reale' },
     { id: 'servizi', label: '🔧 Servizi' },
-    { id: 'operatori', label: '👥 Operatori' },
+    { id: 'utenti', label: '👥 Utenti area' },
   ];
+
+  const areaNome = servizi[0]?.area.nome ?? '';
 
   return (
     <div style={{ minHeight: '100vh', background: '#f5f5f5', fontFamily: 'system-ui, sans-serif' }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 24px', background: '#16213e', color: 'white' }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 20 }}>📋 Saltacode — Admin</h1>
-          <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>
-            {servizi.length > 0 ? `Area: ${servizi[0]?.area.nome}` : ''}
-          </div>
+          {areaNome && <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>Area: {areaNome}</div>}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {ruoliDisponibili.length > 1 && (
+            <select
+              value={user?.ruolo ?? ''}
+              onChange={(e) => handleSwitchRole(e.target.value)}
+              disabled={switchingRole}
+              style={{ padding: '4px 8px', borderRadius: 4, fontSize: 13, border: '1px solid #334155', background: '#1e293b', color: 'white', cursor: 'pointer' }}
+              title="Cambia ruolo attivo"
+            >
+              {ruoliDisponibili.map((r) => (
+                <option key={r} value={r}>{r}</option>
+              ))}
+            </select>
+          )}
           <span style={{ color: '#aaa', fontSize: 14 }}>{user?.username}</span>
           <button onClick={logout} style={btnStyle('#ef4444')}>Esci</button>
         </div>
@@ -283,12 +367,7 @@ export default function AdminDashboard() {
                         <td style={tdStyle}>{s.area.nome}</td>
                         <td style={tdStyle}>{s._count.ticket}</td>
                         <td style={tdStyle}>
-                          <span style={{
-                            display: 'inline-block', padding: '2px 8px', borderRadius: 12,
-                            background: s.attivo ? '#dcfce7' : '#fee2e2',
-                            color: s.attivo ? '#166534' : '#991b1b',
-                            fontSize: 12, fontWeight: 600,
-                          }}>
+                          <span style={badgeStyle(s.attivo ? 'green' : 'red')}>
                             {s.attivo ? 'Attivo' : 'Disabilitato'}
                           </span>
                         </td>
@@ -307,17 +386,19 @@ export default function AdminDashboard() {
           </>
         )}
 
-        {/* ── TAB OPERATORI ── */}
-        {tab === 'operatori' && (
+        {/* ── TAB UTENTI ── */}
+        {tab === 'utenti' && (
           <>
-            <h2 style={{ marginTop: 0 }}>Gestione Operatori</h2>
+            <h2 style={{ marginTop: 0 }}>Utenti della tua area</h2>
 
             {tempPwd && (
               <div style={{ ...cardStyle, background: '#fffbeb', border: '1px solid #f59e0b' }}>
-                <strong>⚠️ Credenziali temporanee:</strong>
-                <p style={{ fontFamily: 'monospace', fontSize: 15, margin: '8px 0 4px' }}>
-                  Username: <strong>{tempPwd.username}</strong>
-                </p>
+                <strong>⚠️ Credenziali temporanee (mostra una sola volta):</strong>
+                {tempPwd.username && (
+                  <p style={{ fontFamily: 'monospace', fontSize: 15, margin: '8px 0 4px' }}>
+                    Username: <strong>{tempPwd.username}</strong>
+                  </p>
+                )}
                 <p style={{ fontFamily: 'monospace', fontSize: 15, margin: '0 0 8px' }}>
                   Password: <strong>{tempPwd.pwd}</strong>
                 </p>
@@ -326,59 +407,104 @@ export default function AdminDashboard() {
             )}
 
             <div style={cardStyle}>
-              <h3 style={{ margin: '0 0 16px' }}>Nuovo operatore</h3>
-              <form onSubmit={handleCreaOperatore} style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-                <div>
-                  <label style={labelStyle}>Cognome</label>
-                  <input style={inputStyle} value={nuovoOp.cognome}
-                    onChange={(e) => setNuovoOp((p) => ({ ...p, cognome: e.target.value }))}
-                    placeholder="Rossi" required />
+              <h3 style={{ margin: '0 0 16px' }}>Nuovo utente</h3>
+              <form onSubmit={handleCreaUtente}>
+                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
+                  <div>
+                    <label style={labelStyle}>Cognome</label>
+                    <input style={inputStyle} value={nuovoUtente.cognome}
+                      onChange={(e) => setNuovoUtente((p) => ({ ...p, cognome: e.target.value }))}
+                      placeholder="Rossi" required />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Nome</label>
+                    <input style={inputStyle} value={nuovoUtente.nome}
+                      onChange={(e) => setNuovoUtente((p) => ({ ...p, nome: e.target.value }))}
+                      placeholder="Mario" required />
+                  </div>
                 </div>
-                <div>
-                  <label style={labelStyle}>Nome</label>
-                  <input style={inputStyle} value={nuovoOp.nome}
-                    onChange={(e) => setNuovoOp((p) => ({ ...p, nome: e.target.value }))}
-                    placeholder="Mario" required />
+                <div style={{ marginBottom: 12 }}>
+                  <label style={labelStyle}>Ruolo</label>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
+                    {RUOLI_ADMIN.map((r) => (
+                      <label key={r} style={chipStyle(nuovoUtente.ruoliSelezionati.includes(r))}>
+                        <input type="checkbox" checked={nuovoUtente.ruoliSelezionati.includes(r)}
+                          onChange={() => toggleRuoloNuovo(r)} style={{ display: 'none' }} />
+                        {r}
+                      </label>
+                    ))}
+                  </div>
                 </div>
-                <button type="submit" style={btnStyle('#16213e')}>Crea Operatore</button>
+                <button type="submit" style={btnStyle('#16213e')}>Crea Utente</button>
               </form>
-              {operatoriError && <p style={errorStyle}>{operatoriError}</p>}
+              {utentiError && <p style={errorStyle}>{utentiError}</p>}
+              {utentiSuccess && <p style={successStyle}>{utentiSuccess}</p>}
             </div>
 
-            {operatoriLoading ? <p>Caricamento…</p> : (
+            {utentiLoading ? <p>Caricamento…</p> : (
               <div style={cardStyle}>
-                <h3 style={{ margin: '0 0 16px' }}>Operatori ({operatori.length})</h3>
-                {operatori.length === 0 ? (
-                  <p style={{ color: '#888' }}>Nessun operatore.</p>
+                <h3 style={{ margin: '0 0 16px' }}>Utenti ({utenti.length})</h3>
+                {utenti.length === 0 ? (
+                  <p style={{ color: '#888' }}>Nessun utente.</p>
                 ) : (
                   <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
                       <tr style={{ background: '#f5f5f5' }}>
-                        {['Username', 'Nome', 'Stato', 'Azioni'].map((h) => (
+                        {['Username', 'Nome', 'Ruoli', 'Stato', 'Azioni'].map((h) => (
                           <th key={h} style={thStyle}>{h}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {operatori.map((u) => (
+                      {utenti.map((u) => (
                         <tr key={u.id} style={{ borderBottom: '1px solid #f0f0f0' }}>
                           <td style={tdStyle}><code>{u.username}</code></td>
                           <td style={tdStyle}>{u.cognome} {u.nome}</td>
                           <td style={tdStyle}>
-                            <span style={{
-                              display: 'inline-block', padding: '2px 8px', borderRadius: 12,
-                              background: u.stato === 'ATTIVO' ? '#dcfce7' : u.stato === 'PAUSA' ? '#fef9c3' : '#fee2e2',
-                              color: u.stato === 'ATTIVO' ? '#166534' : u.stato === 'PAUSA' ? '#854d0e' : '#991b1b',
-                              fontSize: 12, fontWeight: 600,
-                            }}>
+                            {editingRuoli?.utenteId === u.id ? (
+                              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                                {RUOLI_ADMIN.map((r) => (
+                                  <label key={r} style={chipStyle(editingRuoli.ruoli.includes(r))}>
+                                    <input type="checkbox" checked={editingRuoli.ruoli.includes(r)}
+                                      onChange={() => toggleRuoloEditing(r)} style={{ display: 'none' }} />
+                                    {r}
+                                  </label>
+                                ))}
+                              </div>
+                            ) : (
+                              <span style={{ fontSize: 12, fontWeight: 600, color: '#555' }}>
+                                {u.utentiRuoli.map((ur) => ur.ruolo.nome).join(', ')}
+                              </span>
+                            )}
+                          </td>
+                          <td style={tdStyle}>
+                            <span style={badgeStyle(u.stato === 'ATTIVO' ? 'green' : u.stato === 'PAUSA' ? 'yellow' : 'red')}>
                               {u.stato}
                             </span>
                           </td>
-                          <td style={tdStyle}>
-                            <button onClick={() => handleToggleOperatore(u)}
-                              style={btnStyle(u.stato === 'DISABILITATO' ? '#22c55e' : '#ef4444', 'small')}>
-                              {u.stato === 'DISABILITATO' ? 'Abilita' : 'Disabilita'}
-                            </button>
+                          <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
+                            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                              {editingRuoli?.utenteId === u.id ? (
+                                <>
+                                  <button onClick={handleSalvaRuoli} style={btnStyle('#22c55e', 'small')}>Salva</button>
+                                  <button onClick={() => setEditingRuoli(null)} style={btnStyle('#6b7280', 'small')}>Annulla</button>
+                                </>
+                              ) : (
+                                <button
+                                  onClick={() => setEditingRuoli({ utenteId: u.id, ruoli: u.utentiRuoli.map((ur) => ur.ruolo.nome) })}
+                                  style={btnStyle('#8b5cf6', 'small')}
+                                >
+                                  Ruoli
+                                </button>
+                              )}
+                              <button onClick={() => handleResetPwd(u.id)} style={btnStyle('#6366f1', 'small')}>
+                                Reset pwd
+                              </button>
+                              <button onClick={() => handleToggleUtente(u)}
+                                style={btnStyle(u.stato === 'DISABILITATO' ? '#22c55e' : '#ef4444', 'small')}>
+                                {u.stato === 'DISABILITATO' ? 'Abilita' : 'Disabilita'}
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -394,6 +520,7 @@ export default function AdminDashboard() {
   );
 }
 
+// ── Stili ────────────────────────────────────────────────────────────────────
 const cardStyle: React.CSSProperties = {
   background: 'white', borderRadius: 8, padding: 20,
   boxShadow: '0 1px 3px rgba(0,0,0,0.1)', marginBottom: 20,
@@ -414,11 +541,38 @@ const tdStyle: React.CSSProperties = {
   padding: '10px 12px', fontSize: 14, verticalAlign: 'middle',
 };
 const errorStyle: React.CSSProperties = { color: '#ef4444', margin: '8px 0 0', fontSize: 14 };
+const successStyle: React.CSSProperties = { color: '#22c55e', margin: '8px 0 0', fontSize: 14 };
+
 function btnStyle(bg: string, size: 'normal' | 'small' = 'normal'): React.CSSProperties {
   return {
     background: bg, color: 'white', border: 'none', borderRadius: 4,
     cursor: 'pointer', fontWeight: 600,
     padding: size === 'small' ? '4px 10px' : '8px 16px',
     fontSize: size === 'small' ? 12 : 14,
+  };
+}
+
+function chipStyle(selected: boolean): React.CSSProperties {
+  return {
+    display: 'inline-flex', alignItems: 'center', gap: 4,
+    cursor: 'pointer', padding: '4px 10px',
+    border: `1px solid ${selected ? '#16213e' : '#d1d5db'}`,
+    borderRadius: 4,
+    background: selected ? '#16213e' : 'white',
+    color: selected ? 'white' : '#374151',
+    fontSize: 12, fontWeight: 600, userSelect: 'none',
+  };
+}
+
+function badgeStyle(color: 'green' | 'yellow' | 'red'): React.CSSProperties {
+  const map = {
+    green: { bg: '#dcfce7', text: '#166534' },
+    yellow: { bg: '#fef9c3', text: '#854d0e' },
+    red: { bg: '#fee2e2', text: '#991b1b' },
+  };
+  return {
+    display: 'inline-block', padding: '2px 8px', borderRadius: 12,
+    background: map[color].bg, color: map[color].text,
+    fontSize: 12, fontWeight: 600,
   };
 }

@@ -9,12 +9,18 @@ router.use(authenticate);
 
 /**
  * GET /api/aree
- * Roles: SUPERADMIN
- * Lista tutte le aree
+ * SUPERADMIN → tutte le aree (attive e non)
+ * ADMIN/ACCOGLIENZA/OPERATORE → solo aree attive a cui sono assegnati
  */
-router.get('/', authorize('SUPERADMIN'), async (_req: Request, res: Response, next: NextFunction) => {
+router.get('/', authorize('SUPERADMIN', 'ADMIN', 'ACCOGLIENZA', 'OPERATORE'), async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const { ruolo, aree: areeUtente } = req.user!;
+    const isSuperAdmin = ruolo === 'SUPERADMIN';
+
     const aree = await prisma.area.findMany({
+      where: isSuperAdmin
+        ? {}
+        : { attiva: true, id: { in: areeUtente } },
       orderBy: { nome: 'asc' },
       include: {
         _count: { select: { servizi: true, utentiAree: true } },

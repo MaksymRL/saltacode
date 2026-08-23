@@ -70,6 +70,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = useCallback(() => {
     localStorage.removeItem('saltacode_token');
     localStorage.removeItem('saltacode_user');
+    localStorage.removeItem('saltacode_ruoli');
     setState({ user: null, token: null, pending: null });
   }, []);
 

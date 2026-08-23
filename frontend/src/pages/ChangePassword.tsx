@@ -8,7 +8,7 @@ import apiClient from '../api/client';
  * Mostrata dopo il login quando mustChangePwd = true.
  */
 export default function ChangePassword() {
-  const { user, logout } = useAuth();
+  const { user, token, login, logout } = useAuth();
   const navigate = useNavigate();
   const [current, setCurrent] = useState('');
   const [newPwd, setNewPwd] = useState('');
@@ -31,6 +31,12 @@ export default function ChangePassword() {
         currentPassword: current,
         newPassword: newPwd,
       });
+
+      // Aggiorna il contesto: mustChangePwd → false, così non viene
+      // reindirizzato di nuovo a /change-password
+      if (user && token) {
+        login({ ...user, mustChangePwd: false }, token);
+      }
 
       // Redirect alla dashboard del ruolo
       const routes: Record<string, string> = {

@@ -79,4 +79,68 @@ router.post('/logout', authenticate, (_req: Request, res: Response) => {
   res.json({ message: 'Logout effettuato.' });
 });
 
+/**
+ * POST /api/auth/switch-role
+ * Cambia il ruolo attivo nella sessione corrente senza re-login.
+ * Richiede un JWT valido. Il ruolo scelto deve essere tra quelli
+ * assegnati all'utente nel DB.
+ *
+ * Body:  { ruolo: string }
+ * Response: { token: string, user: SessionResult['user'] }
+ */
+router.post('/switch-role', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { ruolo } = req.body as { ruolo?: string };
+    if (!ruolo) {
+      res.status(400).json({ error: 'Campo ruolo obbligatorio.' });
+      return;
+    }
+
+    // Ricarica l'utente per avere ruoli aggiornati
+    const utente = await import('../prisma/client.js').then(({ prisma: p }) =>
+      p.utente.findUnique({
+        where: { id: req.user!.sub },
+        include: {
+          utentiAree: true,
+          utentiRuoli: { include: { ruolo: true } },
+        },
+      })
+    );
+
+    if (!utente || utente.stato === 'DISABILITATO') {
+      res.status(401).json({ error: 'Utente non trovato o disabilitato.' });
+      return;
+    }
+
+    const ruoliDisponibili = utente.utentiRuoli.map((ur) => ur.ruolo.nome);
+    if (!ruoliDisponibili.includes(ruolo)) {
+      res.status(403).json({ error: 'Ruolo non disponibile per questo utente.' });
+      return;
+    }
+
+    const aree = utente.utentiAree.map((ua) => ua.areaId);
+    const { config: cfg } = await import('../config/index.js');
+    const jwt = await import('jsonwebtoken');
+
+    const token = jwt.default.sign(
+      { sub: utente.id, username: utente.username, ruolo, aree },
+      cfg.jwt.secret,
+      { expiresIn: cfg.jwt.expiresIn }
+    );
+
+    res.json({
+      token,
+      user: {
+        id: utente.id,
+        username: utente.username,
+        ruolo,
+        aree,
+        mustChangePwd: utente.mustChangePwd,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 export default router;
