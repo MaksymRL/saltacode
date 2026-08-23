@@ -206,6 +206,18 @@ export default function AdminDashboard() {
     }
   };
 
+  const handleEliminaUtente = async (u: Utente) => {
+    if (!window.confirm(`Eliminare definitivamente ${u.cognome} ${u.nome} (${u.username})?`)) return;
+    setUtentiError('');
+    try {
+      await apiClient.delete(`/utenti/${u.id}`);
+      setUtentiSuccess(`Utente ${u.username} eliminato.`);
+      loadUtenti();
+    } catch (err: any) {
+      setUtentiError(err?.response?.data?.error ?? 'Errore eliminazione utente.');
+    }
+  };
+
   const handleSalvaRuoli = async () => {
     if (!editingRuoli) return;
     setUtentiError('');
@@ -641,6 +653,11 @@ export default function AdminDashboard() {
                                     <button onClick={() => handleToggleUtente(u)}
                                       style={btnStyle(u.stato === 'DISABILITATO' ? '#22c55e' : '#ef4444', 'small')}>
                                       {u.stato === 'DISABILITATO' ? 'Abilita' : 'Disabilita'}
+                                    </button>
+                                    <button onClick={() => handleEliminaUtente(u)}
+                                      style={btnStyle('#7f1d1d', 'small')}
+                                      title="Elimina definitivamente">
+                                      🗑
                                     </button>
                                   </>
                                 )}

@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../hooks/useAuth';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import apiClient from '../../api/client';
-import '../../styles/classic.css';
 
 interface Servizio {
   id: number;
@@ -22,14 +21,14 @@ interface CodaState {
 interface LastCall {
   chiamataId: number;
   ticketNumero: string;
-  servizioId: number;
 }
 
-interface RecentCall {
-  ticketNumero: string;
-  servizioNome: string;
-  timestamp: Date;
-  servizioId: number;
+interface OperatoreStato {
+  id: number;
+  username: string;
+  cognome: string;
+  nome: string;
+  stato: 'ATTIVO' | 'PAUSA' | 'DISABILITATO';
 }
 
 export default function OperatoreDashboard() {
@@ -51,35 +50,45 @@ export default function OperatoreDashboard() {
     setPostazione(num);
   };
 
-  // ── Stato operatore ───────────────────────────────────────────────────────
+  // ── Stato pausa ───────────────────────────────────────────────────────────
   const [isPausa, setIsPausa] = useState(false);
   const [stateLoading, setStateLoading] = useState(false);
-  const [pausaStartTime, setPausaStartTime] = useState<Date | null>(null);
-  const [pausaDuration, setPausaDuration] = useState(0); // in secondi
+  const [pausaStart, setPausaStart] = useState<Date | null>(null);
+  const [pausaSecs, setPausaSecs] = useState(0);
+
+  useEffect(() => {
+    if (!isPausa || !pausaStart) return;
+    const t = setInterval(() => {
+      setPausaSecs(Math.floor((Date.now() - pausaStart.getTime()) / 1000));
+    }, 1000);
+    return () => clearInterval(t);
+  }, [isPausa, pausaStart]);
 
   const handleTogglePausa = async () => {
-    if (!user) return;
     setStateLoading(true);
-    const nuovoStato = isPausa ? 'ATTIVO' : 'PAUSA';
     try {
+      const nuovoStato = isPausa ? 'ATTIVO' : 'PAUSA';
       await apiClient.patch('/utenti/me/stato', { stato: nuovoStato });
-      setIsPausa(!isPausa);
-      
       if (!isPausa) {
-        // Entra in pausa
-        setPausaStartTime(new Date());
-        setPausaDuration(0);
+        setPausaStart(new Date());
+        setPausaSecs(0);
       } else {
-        // Esce dalla pausa
-        setPausaStartTime(null);
-        setPausaDuration(0);
+        setPausaStart(null);
+        setPausaSecs(0);
       }
+      setIsPausa(!isPausa);
     } catch (err: any) {
-      // Mostra l'errore all'utente invece di ignorarlo silenziosamente
       setError(err?.response?.data?.error ?? 'Errore cambio stato.');
     } finally {
       setStateLoading(false);
     }
+  };
+
+  const formatTime = (s: number) => {
+    const h = Math.floor(s / 3600).toString().padStart(2, '0');
+    const m = Math.floor((s % 3600) / 60).toString().padStart(2, '0');
+    const sec = (s % 60).toString().padStart(2, '0');
+    return `${h}:${m}:${sec}`;
   };
 
   // ── Servizi ───────────────────────────────────────────────────────────────
@@ -87,13 +96,10 @@ export default function OperatoreDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [code, setCode] = useState<CodaState[]>([]);
-  const [calling, setCalling] = useState<number | null>(null); // servizioId in chiamata
-  const [lastCalls, setLastCalls] = useState<Map<number, LastCall>>(new Map()); // per annullare
-  const [lastCalledTicket, setLastCalledTicket] = useState<{ numero: string; servizio: string } | null>(null);
-  const [recentCalls, setRecentCalls] = useState<RecentCall[]>([]); // storico chiamate recenti
-  
-  // Trigger per refresh automatico
-  const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [lastCalls, setLastCalls] = useState<Map<number, LastCall>>(new Map());
+  const [calling, setCalling] = useState<number | null>(null);
+  const [recalling, setRecalling] = useState<number | null>(null);
+  const [spotlight, setSpotlight] = useState<{ numero: string; servizio: string; post: number } | null>(null);
 
   const loadServizi = useCallback(async () => {
     setLoading(true);
@@ -109,29 +115,23 @@ export default function OperatoreDashboard() {
 
   useEffect(() => {
     if (postazione !== null) loadServizi();
-  }, [postazione, loadServizi, refreshTrigger]);
+  }, [postazione, loadServizi]);
 
-  // Timer per la pausa
+  // ── Colleghi operatori ────────────────────────────────────────────────────
+  const [colleghi, setColleghi] = useState<OperatoreStato[]>([]);
+
+  const loadColleghi = useCallback(async () => {
+    try {
+      const res = await apiClient.get<OperatoreStato[]>('/utenti/operatori');
+      setColleghi(res.data);
+    } catch { /* non bloccante */ }
+  }, []);
+
   useEffect(() => {
-    if (!isPausa || !pausaStartTime) return;
+    if (postazione !== null) loadColleghi();
+  }, [postazione, loadColleghi]);
 
-    const interval = setInterval(() => {
-      const now = new Date();
-      const elapsed = Math.floor((now.getTime() - pausaStartTime.getTime()) / 1000);
-      setPausaDuration(elapsed);
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [isPausa, pausaStartTime]);
-
-  // Pulisce le chiamate recenti quando si cambia postazione
-  useEffect(() => {
-    if (postazione === null) {
-      setRecentCalls([]);
-    }
-  }, [postazione]);
-
-  // WebSocket
+  // ── WebSocket ─────────────────────────────────────────────────────────────
   const handleWsMessage = useCallback((msg: { type: string; [key: string]: unknown }) => {
     if (msg.type === 'INITIAL_STATE') {
       setCode((msg['code'] as CodaState[]) ?? []);
@@ -139,8 +139,8 @@ export default function OperatoreDashboard() {
     if (msg.type === 'TICKET_EMESSO') {
       const { servizioId, coda } = msg as unknown as { servizioId: number; coda: number };
       setCode((prev) => {
-        const existing = prev.find((c) => c.servizioId === servizioId);
-        if (existing) return prev.map((c) => c.servizioId === servizioId ? { ...c, count: coda } : c);
+        const exists = prev.find((c) => c.servizioId === servizioId);
+        if (exists) return prev.map((c) => c.servizioId === servizioId ? { ...c, count: coda } : c);
         return [...prev, { servizioId, count: coda }];
       });
     }
@@ -150,431 +150,400 @@ export default function OperatoreDashboard() {
         prev.map((c) => c.servizioId === servizioId ? { ...c, count: Math.max(0, c.count - 1) } : c)
       );
     }
-    // Nuovo handler per aggiornamenti coda più precisi
-    if (msg.type === 'CODA_AGGIORNATA') {
-      const { servizioId, count } = msg as unknown as { servizioId: number; count: number };
-      setCode((prev) => {
-        const existing = prev.find((c) => c.servizioId === servizioId);
-        if (existing) return prev.map((c) => c.servizioId === servizioId ? { ...c, count } : c);
-        return [...prev, { servizioId, count }];
-      });
-    }
-    // Handler per stato operatori - aggiorna automaticamente lo stato pausa
+    // Aggiorna lo stato dei colleghi in tempo reale
     if (msg.type === 'STATO_OPERATORE') {
-      const { utenteId, stato } = msg as unknown as { utenteId: number; stato: string };
-      if (utenteId === user?.id) {
-        const wasInPausa = isPausa;
-        const nowInPausa = stato === 'PAUSA';
-        
-        setIsPausa(nowInPausa);
-        
-        if (!wasInPausa && nowInPausa) {
-          // Entra in pausa
-          setPausaStartTime(new Date());
-          setPausaDuration(0);
-        } else if (wasInPausa && !nowInPausa) {
-          // Esce dalla pausa
-          setPausaStartTime(null);
-          setPausaDuration(0);
-        }
-        
-        // Trigger refresh per aggiornare la lista servizi se necessario
-        setRefreshTrigger(prev => prev + 1);
-      }
+      const { utenteId, stato } = msg as unknown as { utenteId: number; stato: 'ATTIVO' | 'PAUSA' | 'DISABILITATO' };
+      setColleghi((prev) =>
+        prev.map((c) => c.id === utenteId ? { ...c, stato } : c)
+      );
     }
-    // Handler per richiami
-    if (msg.type === 'NUMERO_RICHIAMATO') {
-      const { ticket, servizio } = msg as unknown as { ticket: string; servizio: string };
-      setLastCalledTicket({ numero: ticket, servizio });
-    }
-  }, [user?.id, isPausa]);
+  }, []);
 
   useWebSocket({ onMessage: handleWsMessage });
 
+  const getCoda = (id: number) => code.find((c) => c.servizioId === id)?.count ?? 0;
+
   // ── Chiama prossimo ───────────────────────────────────────────────────────
-  const handleChiama = async (servizioId: number, nomeServizio: string) => {
+  const handleChiama = async (s: Servizio) => {
     if (!postazione || isPausa) return;
     setError('');
-    setCalling(servizioId);
+    setCalling(s.id);
     try {
       const res = await apiClient.post<{
-        chiamata: { id: number; ticketNumero: string; postazione: number; timestamp: string };
-      }>('/chiamate', { servizioId, postazione });
-
+        chiamata: { id: number; ticketNumero: string; postazione: number };
+      }>('/chiamate', { servizioId: s.id, postazione });
       const { chiamata } = res.data;
-      setLastCalls((prev) => {
-        const next = new Map(prev);
-        next.set(servizioId, { chiamataId: chiamata.id, ticketNumero: chiamata.ticketNumero, servizioId });
-        return next;
-      });
-      setLastCalledTicket({ numero: chiamata.ticketNumero, servizio: nomeServizio });
-      
-      // Aggiungi alla cronologia delle chiamate recenti (max 10)
-      setRecentCalls((prev) => {
-        const newCall: RecentCall = {
-          ticketNumero: chiamata.ticketNumero,
-          servizioNome: nomeServizio,
-          timestamp: new Date(),
-          servizioId
-        };
-        return [newCall, ...prev.slice(0, 9)]; // Keep only last 10
-      });
+      setLastCalls((prev) => new Map(prev).set(s.id, { chiamataId: chiamata.id, ticketNumero: chiamata.ticketNumero }));
+      setSpotlight({ numero: chiamata.ticketNumero, servizio: s.nome, post: chiamata.postazione });
     } catch (err: any) {
-      if (err?.response?.status === 204) {
-        setError(`Nessun ticket in attesa per ${nomeServizio}.`);
-      } else {
-        setError(err?.response?.data?.error ?? 'Errore chiamata.');
-      }
+      setError(err?.response?.status === 204
+        ? `Nessun ticket in attesa per ${s.nome}.`
+        : (err?.response?.data?.error ?? 'Errore chiamata.'));
     } finally {
       setCalling(null);
     }
   };
 
-  // ── Richiama numero precedente ──────────────────────────────────────────
-  const handleRichiama = async (ticketNumero: string, servizioNome: string) => {
-    if (!postazione || isPausa) return;
+  // ── Richiama numero precedente ────────────────────────────────────────────
+  const handleRichiama = async (s: Servizio) => {
+    const last = lastCalls.get(s.id);
+    if (!last || !postazione || isPausa) return;
     setError('');
+    setRecalling(s.id);
     try {
-      const res = await apiClient.post<{
-        chiamata: { id: number; ticketNumero: string; postazione: number; timestamp: string };
-      }>('/chiamate/recall', { ticketNumero, postazione });
-
-      const { chiamata } = res.data;
-      setLastCalledTicket({ numero: chiamata.ticketNumero, servizio: servizioNome });
+      await apiClient.post('/chiamate/recall', { ticketNumero: last.ticketNumero, postazione });
+      setSpotlight({ numero: last.ticketNumero, servizio: s.nome, post: postazione });
     } catch (err: any) {
-      if (err?.response?.status === 404) {
-        setError(`Numero ${ticketNumero} non trovato o non ancora chiamato.`);
-      } else {
-        setError(err?.response?.data?.error ?? 'Errore richiamo.');
-      }
+      setError(err?.response?.data?.error ?? 'Errore richiamo.');
+    } finally {
+      setRecalling(null);
     }
   };
+
+  // ── Annulla ultima chiamata ───────────────────────────────────────────────
   const handleAnnulla = async (servizioId: number) => {
     const last = lastCalls.get(servizioId);
     if (!last) return;
     setError('');
     try {
       await apiClient.delete(`/chiamate/${last.chiamataId}`);
-      setLastCalls((prev) => {
-        const next = new Map(prev);
-        next.delete(servizioId);
-        return next;
-      });
-      if (lastCalledTicket?.numero === last.ticketNumero) {
-        setLastCalledTicket(null);
-      }
+      setLastCalls((prev) => { const n = new Map(prev); n.delete(servizioId); return n; });
+      if (spotlight?.numero === last.ticketNumero) setSpotlight(null);
     } catch (err: any) {
       setError(err?.response?.data?.error ?? 'Errore annullamento.');
     }
   };
 
-  const getCoda = (servizioId: number) =>
-    code.find((c) => c.servizioId === servizioId)?.count ?? 0;
-
-  // Formatta il tempo di pausa in HH:MM:SS
-  const formatPausaDuration = (seconds: number) => {
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = seconds % 60;
-    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
-
   // ── Schermata selezione postazione ────────────────────────────────────────
   if (postazione === null) {
     return (
-      <div className="classic-layout">
-        <div className="classic-header">
-          <h1>🖥️ Saltacode - Postazione Operatore</h1>
-        </div>
-        <div className="classic-main" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-          <div className="classic-section" style={{ maxWidth: 400, textAlign: 'center' }}>
-            <div className="classic-section-header">
-              Numero Postazione
-            </div>
-            <div className="classic-section-content">
-              <p style={{ marginBottom: 20 }}>Inserisci il numero della tua postazione per iniziare</p>
-              <form onSubmit={handlePostazioneSubmit}>
-                <input
-                  type="number" min={1} max={99}
-                  value={postazioneInput}
-                  onChange={(e) => setPostazioneInput(e.target.value)}
-                  className="classic-input"
-                  style={{ fontSize: 18, textAlign: 'center', width: 80, marginBottom: 15 }}
-                  autoFocus
-                />
-                {postazioneError && <p style={{ color: 'red', margin: '8px 0', fontSize: 14 }}>{postazioneError}</p>}
-                <br />
-                <button type="submit" className="classic-btn classic-btn-primary" style={{ fontSize: 16, padding: '10px 32px' }}>
-                  Conferma
-                </button>
-              </form>
-            </div>
+      <div style={S.page}>
+        <div style={S.centerBox}>
+          <div style={{ textAlign: 'center', marginBottom: 32 }}>
+            <div style={{ fontSize: 48, marginBottom: 8 }}>🖥️</div>
+            <h1 style={{ margin: 0, fontSize: 24, fontWeight: 800 }}>Saltacode</h1>
+            <p style={{ margin: '6px 0 0', color: '#6b7280', fontSize: 14 }}>Postazione Operatore</p>
           </div>
-        </div>
-        <div className="classic-footer">
-          Saltacode Queue Management System
-        </div>
-      </div>
-    );
-  }
-
-  // ── Schermata di pausa dedicata ──────────────────────────────────────────
-  if (isPausa && postazione !== null) {
-    return (
-      <div className="classic-layout">
-        <div className="classic-header" style={{ background: '#f59e0b', borderBottomColor: '#d97706' }}>
-          <h1 style={{ color: 'white' }}>🖥️ Postazione {postazione} - IN PAUSA</h1>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 15 }}>
-            <span style={{ color: 'white', fontSize: 14 }}>{user?.username}</span>
-            <button onClick={logout} className="classic-btn classic-btn-danger">Esci</button>
-          </div>
-        </div>
-
-        <div className="classic-main" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', textAlign: 'center' }}>
-          <div className="classic-section" style={{ maxWidth: 600, marginBottom: 30 }}>
-            <div className="classic-section-header" style={{ background: '#fbbf24', fontSize: 20, textAlign: 'center' }}>
-              ⏸️ POSTAZIONE IN PAUSA
-            </div>
-            <div className="classic-section-content">
-              <div style={{ fontSize: 48, fontFamily: 'monospace', fontWeight: 'bold', color: '#dc2626', marginBottom: 20, letterSpacing: 2 }}>
-                {formatPausaDuration(pausaDuration)}
-              </div>
-              <p style={{ fontSize: 16, marginBottom: 15, color: '#374151' }}>
-                Tempo di pausa trascorso
-              </p>
-              {pausaStartTime && (
-                <p style={{ fontSize: 14, color: '#6b7280', marginBottom: 20 }}>
-                  Pausa iniziata alle {pausaStartTime.toLocaleTimeString()}
-                </p>
-              )}
-              <button
-                onClick={handleTogglePausa}
-                disabled={stateLoading}
-                className="classic-btn classic-btn-success"
-                style={{ fontSize: 18, padding: '15px 40px', marginTop: 10 }}
-              >
-                {stateLoading ? '⏳ Attendi...' : '▶ Riprendi Servizio'}
-              </button>
-            </div>
-          </div>
-          
-          <div style={{ fontSize: 14, color: '#6b7280', textAlign: 'center', maxWidth: 400 }}>
-            <p>Sei attualmente in pausa. I clienti non possono essere chiamati.</p>
-            <p>Premi "Riprendi Servizio" quando sei pronto a continuare.</p>
-          </div>
-        </div>
-
-        <div className="classic-footer">
-          Saltacode Queue Management System
+          <form onSubmit={handlePostazioneSubmit}>
+            <label style={S.label}>Numero postazione</label>
+            <input
+              type="number" min={1} max={99}
+              value={postazioneInput}
+              onChange={(e) => setPostazioneInput(e.target.value)}
+              style={{ ...S.input, fontSize: 28, textAlign: 'center', width: '100%' }}
+              autoFocus
+            />
+            {postazioneError && <p style={S.errText}>{postazioneError}</p>}
+            <button type="submit" style={{ ...S.btn('#1a1a2e'), width: '100%', marginTop: 16, fontSize: 16, padding: '12px' }}>
+              Inizia turno
+            </button>
+          </form>
         </div>
       </div>
     );
   }
 
   // ── Dashboard principale ──────────────────────────────────────────────────
+  const altriOperatori = colleghi.filter((c) => c.id !== user?.id);
+
   return (
-    <div className="classic-layout">
-      <div className="classic-header">
-        <div>
-          <h1>🖥️ Postazione {postazione}</h1>
-          <div style={{ fontSize: 12, color: '#666', marginTop: 2 }}>Operatore: {user?.username}</div>
+    <div style={{ minHeight: '100vh', background: '#f1f5f9', fontFamily: 'system-ui, sans-serif', display: 'flex', flexDirection: 'column' }}>
+
+      {/* ── HEADER ── */}
+      <header style={{
+        background: isPausa
+          ? 'linear-gradient(90deg, #b45309, #d97706)'
+          : 'linear-gradient(90deg, #1e293b, #334155)',
+        color: 'white', padding: '0 24px',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        height: 64, flexShrink: 0,
+        transition: 'background 0.4s',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <div style={{
+            background: isPausa ? '#f59e0b' : '#533483',
+            borderRadius: 8, padding: '6px 14px',
+            fontSize: 20, fontWeight: 900, letterSpacing: 1,
+          }}>
+            {isPausa ? '⏸' : '🖥️'} Postazione {postazione}
+          </div>
+          <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)' }}>{user?.username}</div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {isPausa && (
+            <div style={{
+              background: 'rgba(0,0,0,0.25)', borderRadius: 6,
+              padding: '4px 12px', fontFamily: 'monospace',
+              fontSize: 20, fontWeight: 700, letterSpacing: 2,
+            }}>
+              {formatTime(pausaSecs)}
+            </div>
+          )}
           <button
             onClick={handleTogglePausa}
             disabled={stateLoading}
-            className={`classic-btn ${isPausa ? 'classic-btn-danger' : 'classic-btn-success'}`}
-            style={{ fontSize: 14 }}
+            style={{
+              background: isPausa ? '#22c55e' : '#f59e0b',
+              color: 'white', border: 'none', borderRadius: 8,
+              padding: '8px 20px', fontWeight: 700, fontSize: 14,
+              cursor: stateLoading ? 'not-allowed' : 'pointer',
+              display: 'flex', alignItems: 'center', gap: 6,
+              transition: 'background 0.2s',
+            }}
           >
-            {isPausa ? '🟡 In Pausa' : '🟢 Attivo'}
+            {stateLoading ? '⏳' : isPausa ? '▶ Riprendi' : '⏸ Pausa'}
           </button>
-          <button onClick={logout} className="classic-btn classic-btn-danger">Esci</button>
+          <button onClick={logout} style={{
+            background: 'rgba(239,68,68,0.15)', color: '#fca5a5',
+            border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8,
+            padding: '8px 16px', fontWeight: 600, fontSize: 13, cursor: 'pointer',
+          }}>
+            Esci
+          </button>
         </div>
-      </div>
+      </header>
 
-      <main style={{ padding: 24, maxWidth: 1000, margin: '0 auto' }}>
+      {/* ── BANNER PAUSA ── */}
+      {isPausa && (
+        <div style={{
+          background: 'linear-gradient(90deg, #fffbeb, #fef3c7)',
+          borderBottom: '2px solid #f59e0b',
+          padding: '10px 24px',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, color: '#92400e' }}>
+            <span style={{ fontSize: 22 }}>⏸️</span>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>Postazione in pausa</div>
+              <div style={{ fontSize: 13 }}>
+                Inizio: {pausaStart?.toLocaleTimeString('it-IT')} — Trascorso: <strong style={{ fontFamily: 'monospace' }}>{formatTime(pausaSecs)}</strong>
+              </div>
+            </div>
+          </div>
+          <button onClick={handleTogglePausa} disabled={stateLoading} style={{
+            background: '#22c55e', color: 'white', border: 'none',
+            borderRadius: 8, padding: '10px 24px', fontWeight: 700,
+            fontSize: 15, cursor: 'pointer',
+          }}>
+            ▶ Riprendi servizio
+          </button>
+        </div>
+      )}
 
-        {/* Ultimo numero chiamato */}
-        {lastCalledTicket && (
+      <main style={{ flex: 1, padding: '20px 24px', maxWidth: 1100, margin: '0 auto', width: '100%', boxSizing: 'border-box' }}>
+
+        {/* ── SPOTLIGHT ── */}
+        {spotlight && (
           <div style={{
-            background: '#533483', color: 'white', borderRadius: 10,
-            padding: '16px 24px', marginBottom: 24,
+            background: 'linear-gradient(135deg, #533483, #7c3aed)',
+            color: 'white', borderRadius: 12,
+            padding: '16px 24px', marginBottom: 20,
             display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            boxShadow: '0 4px 20px rgba(83,52,131,0.4)',
           }}>
             <div>
-              <div style={{ fontSize: 13, opacity: 0.7, marginBottom: 4 }}>NUMERO CHIAMATO</div>
-              <div style={{ fontSize: 40, fontWeight: 900 }}>{lastCalledTicket.numero}</div>
-              <div style={{ fontSize: 14, opacity: 0.8 }}>{lastCalledTicket.servizio} → Postazione {postazione}</div>
-            </div>
-            <button onClick={() => setLastCalledTicket(null)} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: 'white', borderRadius: 4, padding: '4px 10px', cursor: 'pointer' }}>✕</button>
-          </div>
-        )}
-
-        {isPausa && (
-          <div style={{ 
-            background: 'linear-gradient(135deg, #fef9c3 0%, #fde047 100%)', 
-            border: '2px solid #f59e0b', 
-            borderRadius: 12, 
-            padding: '16px 20px', 
-            marginBottom: 20, 
-            color: '#854d0e',
-            boxShadow: '0 4px 8px rgba(245, 158, 11, 0.2)'
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <span style={{ fontSize: 24 }}>⏸️</span>
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: 16 }}>Postazione in pausa</div>
-                  <div style={{ fontSize: 14, opacity: 0.8 }}>
-                    Tempo di pausa: <strong style={{ fontFamily: 'monospace' }}>{formatPausaDuration(pausaDuration)}</strong>
-                    {pausaStartTime && ` (dalle ${pausaStartTime.toLocaleTimeString()})`}
-                  </div>
-                </div>
+              <div style={{ fontSize: 12, opacity: 0.7, letterSpacing: 2, textTransform: 'uppercase', marginBottom: 4 }}>
+                Numero chiamato — {spotlight.servizio} → Post. {spotlight.post}
               </div>
-              <button 
-                onClick={handleTogglePausa}
-                disabled={stateLoading}
-                style={{
-                  background: '#22c55e',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: 8,
-                  padding: '10px 20px',
-                  fontWeight: 700,
-                  cursor: stateLoading ? 'not-allowed' : 'pointer',
-                  opacity: stateLoading ? 0.7 : 1
-                }}
-              >
-                {stateLoading ? '⏳' : '▶ Riprendi'}
-              </button>
+              <div style={{ fontSize: 56, fontWeight: 900, lineHeight: 1, letterSpacing: 3 }}>
+                {spotlight.numero}
+              </div>
             </div>
+            <button onClick={() => setSpotlight(null)} style={{
+              background: 'rgba(255,255,255,0.15)', border: 'none',
+              color: 'white', borderRadius: 6, padding: '6px 12px',
+              cursor: 'pointer', fontSize: 18,
+            }}>✕</button>
           </div>
         )}
 
+        {/* ── ERRORE ── */}
         {error && (
-          <div style={{ background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 6, padding: '10px 16px', marginBottom: 16, color: '#991b1b' }}>
-            {error}
-            <button onClick={() => setError('')} style={{ float: 'right', background: 'none', border: 'none', cursor: 'pointer', color: '#991b1b', fontWeight: 700 }}>✕</button>
-          </div>
-        )}
-
-        <h2 style={{ marginTop: 0 }}>Servizi</h2>
-
-        {/* Sezione chiamate recenti */}
-        {recentCalls.length > 0 && (
-          <div style={{ 
-            background: 'white', 
-            borderRadius: 10, 
-            boxShadow: '0 2px 8px rgba(0,0,0,0.08)', 
-            padding: 16, 
-            marginBottom: 20,
-            borderTop: '3px solid #8b5cf6'
+          <div style={{
+            background: '#fee2e2', border: '1px solid #fca5a5',
+            borderRadius: 8, padding: '10px 16px', marginBottom: 16,
+            color: '#991b1b', display: 'flex', justifyContent: 'space-between',
           }}>
-            <h3 style={{ margin: '0 0 12px', fontSize: 16, color: '#8b5cf6' }}>📞 Chiamate Recenti</h3>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {recentCalls.slice(0, 5).map((call, index) => (
-                <button
-                  key={`${call.ticketNumero}-${index}`}
-                  onClick={() => handleRichiama(call.ticketNumero, call.servizioNome)}
-                  disabled={isPausa}
-                  style={{
-                    background: isPausa ? '#f3f4f6' : '#8b5cf6',
-                    color: isPausa ? '#9ca3af' : 'white',
-                    border: 'none',
-                    borderRadius: 6,
-                    padding: '6px 12px',
-                    fontSize: 12,
-                    fontWeight: 600,
-                    cursor: isPausa ? 'not-allowed' : 'pointer',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    minWidth: 80
-                  }}
-                  title={`Richiama ${call.ticketNumero} (${call.servizioNome}) - ${call.timestamp.toLocaleTimeString()}`}
-                >
-                  <span>{call.ticketNumero}</span>
-                  <span style={{ fontSize: 10, opacity: 0.8 }}>{call.timestamp.toLocaleTimeString()}</span>
-                </button>
-              ))}
-            </div>
+            <span>{error}</span>
+            <button onClick={() => setError('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#991b1b', fontWeight: 700, fontSize: 16 }}>✕</button>
           </div>
         )}
 
+        {/* ── SERVIZI ── */}
         {loading ? (
-          <p>Caricamento servizi…</p>
+          <p style={{ color: '#888', textAlign: 'center', marginTop: 60 }}>Caricamento servizi…</p>
         ) : servizi.length === 0 ? (
-          <p style={{ color: '#888' }}>Nessun servizio attivo assegnato.</p>
+          <p style={{ color: '#888', textAlign: 'center', marginTop: 60 }}>Nessun servizio attivo assegnato.</p>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 16 }}>
             {servizi.map((s) => {
               const coda = getCoda(s.id);
-              const lastCall = lastCalls.get(s.id);
+              const last = lastCalls.get(s.id);
               const isCalling = calling === s.id;
+              const isRecalling = recalling === s.id;
+              const canCall = !isPausa && !isCalling && coda > 0;
+              const canRecall = !isPausa && !isRecalling && !!last;
 
               return (
                 <div key={s.id} style={{
-                  background: 'white', borderRadius: 10,
-                  boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
-                  padding: 20, borderTop: '4px solid #533483',
+                  background: 'white', borderRadius: 12,
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.07)',
+                  overflow: 'hidden', border: '1px solid #e2e8f0',
+                  opacity: isPausa ? 0.75 : 1, transition: 'opacity 0.3s',
                 }}>
-                  <div style={{ fontSize: 11, color: '#6b7280', textTransform: 'uppercase', letterSpacing: 1 }}>
-                    {s.area.prefisso}{s.lettera}
-                  </div>
-                  <div style={{ fontSize: 16, fontWeight: 700, margin: '4px 0 12px' }}>{s.nome}</div>
-
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 16 }}>
-                    <span style={{
-                      fontSize: 36, fontWeight: 900,
-                      color: coda === 0 ? '#9ca3af' : coda < 5 ? '#f59e0b' : '#ef4444',
-                    }}>{coda}</span>
-                    <span style={{ fontSize: 13, color: '#9ca3af' }}>in attesa</span>
-                  </div>
-
-                  {lastCall && (
-                    <div style={{ background: '#f0fdf4', borderRadius: 6, padding: '6px 10px', marginBottom: 10, fontSize: 13 }}>
-                      Ultimo chiamato: <strong>{lastCall.ticketNumero}</strong>
+                  <div style={{
+                    background: 'linear-gradient(135deg, #1e293b, #334155)',
+                    padding: '12px 16px',
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  }}>
+                    <div>
+                      <div style={{ fontSize: 11, color: '#94a3b8', letterSpacing: 2, textTransform: 'uppercase' }}>
+                        {s.area.prefisso}{s.lettera}
+                      </div>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: 'white', marginTop: 2 }}>{s.nome}</div>
                     </div>
-                  )}
-
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button
-                      onClick={() => handleChiama(s.id, s.nome)}
-                      disabled={isCalling || isPausa || coda === 0}
-                      style={{
-                        flex: 1, padding: '10px 0', fontWeight: 700, fontSize: 16,
-                        background: isCalling || isPausa || coda === 0 ? '#e5e7eb' : '#533483',
-                        color: isCalling || isPausa || coda === 0 ? '#9ca3af' : 'white',
-                        border: 'none', borderRadius: 6, cursor: isCalling || isPausa || coda === 0 ? 'not-allowed' : 'pointer',
-                      }}
-                      title="Chiama prossimo"
-                    >
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{
+                        fontSize: 42, fontWeight: 900, lineHeight: 1,
+                        color: coda === 0 ? '#475569' : coda < 5 ? '#f59e0b' : '#ef4444',
+                      }}>{coda}</div>
+                      <div style={{ fontSize: 11, color: '#64748b' }}>in attesa</div>
+                    </div>
+                  </div>
+                  <div style={{
+                    padding: '8px 16px', background: last ? '#f0fdf4' : '#f8fafc',
+                    borderBottom: '1px solid #e2e8f0', fontSize: 13,
+                    minHeight: 36, display: 'flex', alignItems: 'center',
+                  }}>
+                    {last ? (
+                      <span style={{ color: '#166534' }}>
+                        Ultimo: <strong style={{ fontFamily: 'monospace', fontSize: 15 }}>{last.ticketNumero}</strong>
+                      </span>
+                    ) : (
+                      <span style={{ color: '#94a3b8' }}>Nessuna chiamata ancora</span>
+                    )}
+                  </div>
+                  <div style={{ padding: '12px 16px', display: 'flex', gap: 8 }}>
+                    <button onClick={() => handleChiama(s)} disabled={!canCall} style={{
+                      flex: 2, padding: '12px 0',
+                      background: canCall ? '#533483' : '#e2e8f0',
+                      color: canCall ? 'white' : '#94a3b8',
+                      border: 'none', borderRadius: 8, fontWeight: 700, fontSize: 16,
+                      cursor: canCall ? 'pointer' : 'not-allowed', transition: 'background 0.15s',
+                    }}>
                       {isCalling ? '⏳' : '▶ Chiama'}
                     </button>
-                    <button
-                      onClick={() => handleAnnulla(s.id)}
-                      disabled={!lastCall}
+                    <button onClick={() => handleRichiama(s)} disabled={!canRecall}
+                      title={last ? `Richiama ${last.ticketNumero}` : 'Nessun numero precedente'}
+                      style={{
+                        flex: 1, padding: '12px 0',
+                        background: canRecall ? '#0ea5e9' : '#e2e8f0',
+                        color: canRecall ? 'white' : '#94a3b8',
+                        border: 'none', borderRadius: 8, fontWeight: 700, fontSize: 14,
+                        cursor: canRecall ? 'pointer' : 'not-allowed', transition: 'background 0.15s',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
+                      }}>
+                      {isRecalling ? '⏳' : <><span style={{ fontSize: 16 }}>🔁</span> {last?.ticketNumero ?? '—'}</>}
+                    </button>
+                    <button onClick={() => handleAnnulla(s.id)} disabled={!last}
                       title="Annulla ultima chiamata"
                       style={{
-                        padding: '10px 14px', fontWeight: 700, fontSize: 16,
-                        background: lastCall ? '#fee2e2' : '#f3f4f6',
-                        color: lastCall ? '#ef4444' : '#9ca3af',
-                        border: 'none', borderRadius: 6, cursor: lastCall ? 'pointer' : 'not-allowed',
-                      }}
-                    >
-                      ✕
-                    </button>
+                        padding: '12px 14px',
+                        background: last ? '#fee2e2' : '#e2e8f0',
+                        color: last ? '#ef4444' : '#94a3b8',
+                        border: 'none', borderRadius: 8, fontWeight: 700, fontSize: 16,
+                        cursor: last ? 'pointer' : 'not-allowed', transition: 'background 0.15s',
+                      }}>✕</button>
                   </div>
                 </div>
               );
             })}
           </div>
         )}
+
+        {/* ── COLLEGHI ONLINE ── */}
+        {altriOperatori.length > 0 && (
+          <div style={{
+            marginTop: 28,
+            background: 'white', borderRadius: 12,
+            border: '1px solid #e2e8f0',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
+            overflow: 'hidden',
+          }}>
+            <div style={{
+              padding: '12px 20px',
+              background: '#f8fafc',
+              borderBottom: '1px solid #e2e8f0',
+              fontSize: 13, fontWeight: 700, color: '#475569',
+              letterSpacing: 1, textTransform: 'uppercase',
+            }}>
+              👥 Colleghi ({altriOperatori.length})
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 0 }}>
+              {altriOperatori.map((op, i) => (
+                <div key={op.id} style={{
+                  display: 'flex', alignItems: 'center', gap: 12,
+                  padding: '12px 20px', flex: '1 1 200px',
+                  borderRight: i % 2 === 0 ? '1px solid #f1f5f9' : 'none',
+                  borderBottom: '1px solid #f1f5f9',
+                }}>
+                  {/* Indicatore stato */}
+                  <div style={{
+                    width: 12, height: 12, borderRadius: '50%', flexShrink: 0,
+                    background: op.stato === 'ATTIVO' ? '#22c55e' : '#f59e0b',
+                    boxShadow: op.stato === 'ATTIVO'
+                      ? '0 0 6px rgba(34,197,94,0.6)'
+                      : '0 0 6px rgba(245,158,11,0.6)',
+                  }} />
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 14, color: '#1e293b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {op.cognome} {op.nome}
+                    </div>
+                    <div style={{ fontSize: 12, color: op.stato === 'ATTIVO' ? '#16a34a' : '#d97706', fontWeight: 600 }}>
+                      {op.stato === 'ATTIVO' ? '● Attivo' : '⏸ In pausa'}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
       </main>
 
-      <div className="classic-footer">
+      <footer style={{
+        padding: '8px 24px', background: '#1e293b',
+        color: '#475569', fontSize: 12, textAlign: 'center',
+      }}>
         Saltacode Queue Management System
-      </div>
+      </footer>
     </div>
   );
 }
+
+// ── Stili helper ─────────────────────────────────────────────────────────────
+const S = {
+  page: {
+    minHeight: '100vh', background: 'linear-gradient(135deg, #1a1a2e, #16213e)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontFamily: 'system-ui, sans-serif',
+  } as React.CSSProperties,
+  centerBox: {
+    background: 'white', borderRadius: 12, padding: 40, width: 340,
+    boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+  } as React.CSSProperties,
+  label: {
+    display: 'block', fontSize: 12, fontWeight: 600,
+    color: '#374151', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5,
+  } as React.CSSProperties,
+  input: {
+    display: 'block', padding: '8px 12px', border: '1.5px solid #d1d5db',
+    borderRadius: 6, fontSize: 14, boxSizing: 'border-box', outline: 'none',
+  } as React.CSSProperties,
+  errText: { color: '#ef4444', fontSize: 13, margin: '6px 0 0' } as React.CSSProperties,
+  btn: (bg: string) => ({
+    background: bg, color: 'white', border: 'none', borderRadius: 8,
+    padding: '10px 20px', fontWeight: 700, fontSize: 14, cursor: 'pointer',
+  } as React.CSSProperties),
+};

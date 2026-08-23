@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../hooks/useAuth';
+import { useWebSocket } from '../../hooks/useWebSocket';
 import apiClient from '../../api/client';
 
 interface Area {
@@ -32,13 +33,39 @@ interface Utente {
   utentiAree: { areaId: number }[];
 }
 
-type Tab = 'aree' | 'servizi' | 'utenti';
+type Tab = 'code' | 'aree' | 'servizi' | 'utenti';
 
 const ALL_RUOLI = ['SUPERADMIN', 'ADMIN', 'ACCOGLIENZA', 'OPERATORE'];
 
 export default function SuperAdminDashboard() {
   const { user, login, logout } = useAuth();
-  const [tab, setTab] = useState<Tab>('aree');
+  const [tab, setTab] = useState<Tab>('code');
+
+  // ── Code real-time via WebSocket ──────────────────────────────────────────
+  interface CodaState { servizioId: number; nomeServizio: string; count: number; }
+  const [code, setCode] = useState<CodaState[]>([]);
+
+  const handleWsMessage = useCallback((msg: { type: string; [key: string]: unknown }) => {
+    if (msg.type === 'INITIAL_STATE') {
+      setCode((msg['code'] as CodaState[]) ?? []);
+    }
+    if (msg.type === 'TICKET_EMESSO') {
+      const { servizioId, coda } = msg as unknown as { servizioId: number; coda: number };
+      setCode((prev) => {
+        const exists = prev.find((c) => c.servizioId === servizioId);
+        if (exists) return prev.map((c) => c.servizioId === servizioId ? { ...c, count: coda } : c);
+        return [...prev, { servizioId, nomeServizio: '?', count: coda }];
+      });
+    }
+    if (msg.type === 'NUMERO_CHIAMATO') {
+      const { servizioId } = msg as unknown as { servizioId: number };
+      setCode((prev) =>
+        prev.map((c) => c.servizioId === servizioId ? { ...c, count: Math.max(0, c.count - 1) } : c)
+      );
+    }
+  }, []);
+
+  useWebSocket({ onMessage: handleWsMessage });
 
   // ── Switch ruolo ──────────────────────────────────────────────────────────
   // Carica i ruoli disponibili dal localStorage (salvati al login)
@@ -241,6 +268,18 @@ export default function SuperAdminDashboard() {
     }
   };
 
+  const handleEliminaUtente = async (u: Utente) => {
+    if (!window.confirm(`Eliminare definitivamente ${u.cognome} ${u.nome} (${u.username})?`)) return;
+    setUtentiError('');
+    try {
+      await apiClient.delete(`/utenti/${u.id}`);
+      setUtentiSuccess(`Utente ${u.username} eliminato.`);
+      loadUtenti();
+    } catch (err: any) {
+      setUtentiError(err?.response?.data?.error ?? 'Errore eliminazione utente.');
+    }
+  };
+
   const handleSalvaRuoli = async () => {
     if (!editingRuoli) return;
     setUtentiError('');
@@ -349,6 +388,7 @@ export default function SuperAdminDashboard() {
       {/* Tabs */}
       <div style={{ background: 'white', borderBottom: '1px solid #e0e0e0', padding: '0 24px', display: 'flex', gap: 0 }}>
         {([
+          { id: 'code', label: '📊 Code live' },
           { id: 'aree', label: '📍 Aree' },
           { id: 'servizi', label: '🔧 Servizi' },
           { id: 'utenti', label: '👤 Utenti' },
@@ -369,6 +409,47 @@ export default function SuperAdminDashboard() {
       </div>
 
       <main style={{ padding: 24, maxWidth: 1100, margin: '0 auto' }}>
+
+        {/* ── TAB CODE ── */}
+        {tab === 'code' && (
+          <>
+            <h2 style={{ marginTop: 0 }}>Code in tempo reale — tutte le aree</h2>
+            {code.length === 0 ? (
+              <p style={{ color: '#888' }}>Nessun servizio con ticket in attesa.</p>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 16 }}>
+                {code.map((c) => {
+                  // Trova il servizio per nome area
+                  const servizio = servizi.find((s) => s.id === c.servizioId);
+                  const color = c.count === 0 ? '#94a3b8' : c.count < 5 ? '#f59e0b' : '#ef4444';
+                  return (
+                    <div key={c.servizioId} style={{
+                      ...cardStyle,
+                      borderLeft: `5px solid ${color}`,
+                      marginBottom: 0,
+                    }}>
+                      <div style={{ fontSize: 11, color: '#6b7280', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>
+                        {servizio ? `${servizio.area.prefisso}${servizio.lettera}` : `#${c.servizioId}`}
+                      </div>
+                      <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8, color: '#1e293b' }}>
+                        {c.nomeServizio || servizio?.nome || '—'}
+                      </div>
+                      {servizio && (
+                        <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 8 }}>
+                          {servizio.area.nome}
+                        </div>
+                      )}
+                      <div style={{ fontSize: 40, fontWeight: 900, color, lineHeight: 1 }}>
+                        {c.count}
+                      </div>
+                      <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>in attesa</div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        )}
 
         {/* ── TAB AREE ── */}
         {tab === 'aree' && (
@@ -710,6 +791,11 @@ export default function SuperAdminDashboard() {
                               <button onClick={() => handleToggleUtente(u)}
                                 style={btnStyle(u.stato === 'DISABILITATO' ? '#22c55e' : '#ef4444', 'small')}>
                                 {u.stato === 'DISABILITATO' ? 'Abilita' : 'Disabilita'}
+                              </button>
+                              <button onClick={() => handleEliminaUtente(u)}
+                                style={btnStyle('#7f1d1d', 'small')}
+                                title="Elimina definitivamente">
+                                🗑
                               </button>
                             </div>
                           </td>

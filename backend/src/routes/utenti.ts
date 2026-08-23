@@ -20,6 +20,36 @@ function sanitize(u: any) {
 }
 
 /**
+ * GET /api/utenti/operatori
+ * Restituisce tutti gli operatori dell'area del richiedente con il loro stato.
+ * Accessibile a: OPERATORE, ACCOGLIENZA, ADMIN, SUPERADMIN
+ */
+router.get('/operatori', authorize('SUPERADMIN', 'ADMIN', 'ACCOGLIENZA', 'OPERATORE'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { aree } = req.user!;
+    const operatori = await prisma.utente.findMany({
+      where: {
+        utentiRuoli: { some: { ruolo: { nome: 'OPERATORE' } } },
+        utentiAree: { some: { areaId: { in: aree } } },
+        stato: { not: 'DISABILITATO' },
+      },
+      select: {
+        id: true,
+        username: true,
+        cognome: true,
+        nome: true,
+        stato: true,
+        utentiAree: { select: { areaId: true } },
+      },
+      orderBy: [{ cognome: 'asc' }, { nome: 'asc' }],
+    });
+    res.json(operatori);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
  * GET /api/utenti
  * SUPERADMIN → tutti; ADMIN → solo utenti nella propria area
  */
@@ -308,6 +338,69 @@ router.patch('/:id', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res:
 });
 
 /**
+ * DELETE /api/utenti/:id
+ * SUPERADMIN → qualsiasi utente (tranne se stesso)
+ * ADMIN → solo utenti della propria area che non sono ADMIN o SUPERADMIN
+ */
+router.delete('/:id', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = parseInt(req.params['id'] ?? '', 10);
+    if (isNaN(id)) {
+      res.status(400).json({ error: 'ID non valido.' });
+      return;
+    }
+
+    const requester = req.user!;
+
+    // Non può eliminare se stesso
+    if (requester.sub === id) {
+      res.status(403).json({ error: 'Non puoi eliminare il tuo stesso account.' });
+      return;
+    }
+
+    const target = await prisma.utente.findUnique({
+      where: { id },
+      include: {
+        utentiAree: true,
+        utentiRuoli: { include: { ruolo: true } },
+      },
+    });
+
+    if (!target) {
+      res.status(404).json({ error: 'Utente non trovato.' });
+      return;
+    }
+
+    const targetRuoli = target.utentiRuoli.map((ur) => ur.ruolo.nome);
+
+    // ADMIN: non può eliminare ADMIN o SUPERADMIN
+    if (requester.ruolo === 'ADMIN') {
+      if (targetRuoli.includes('ADMIN') || targetRuoli.includes('SUPERADMIN')) {
+        res.status(403).json({ error: 'Non autorizzato a eliminare utenti Admin o SuperAdmin.' });
+        return;
+      }
+      // Solo utenti della propria area
+      const targetAree = target.utentiAree.map((ua) => ua.areaId);
+      if (!targetAree.some((a) => requester.aree.includes(a))) {
+        res.status(403).json({ error: 'Non autorizzato a eliminare questo utente.' });
+        return;
+      }
+    }
+
+    // Elimina l'utente (le relazioni vengono eliminate in cascade dal DB)
+    await prisma.utente.delete({ where: { id } });
+
+    res.status(204).send();
+  } catch (err: any) {
+    if (err?.code === 'P2025') {
+      res.status(404).json({ error: 'Utente non trovato.' });
+      return;
+    }
+    next(err);
+  }
+});
+
+/**
  * POST /api/utenti/change-password
  * Body: { currentPassword: string, newPassword: string }
  */
@@ -358,7 +451,7 @@ router.post('/change-password', async (req: Request, res: Response, next: NextFu
  * Body: { stato: 'ATTIVO' | 'PAUSA' }
  * Permette agli operatori di cambiare il proprio stato operativo
  */
-router.patch('/me/stato', authorize('OPERATORE'), async (req: Request, res: Response, next: NextFunction) => {
+router.patch('/me/stato', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const user = req.user!;
     const { stato } = req.body as { stato?: string };

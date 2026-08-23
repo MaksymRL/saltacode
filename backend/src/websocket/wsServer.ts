@@ -46,8 +46,16 @@ export function attachWebSocketServer(server: Server): void {
 
     // Iscrizione alle room
     const isMonitor = payload.ruolo === 'MONITOR';
+    const isSuperAdmin = payload.ruolo === 'SUPERADMIN';
+
     if (isMonitor) {
       wsService.joinMonitor(ws);
+    } else if (isSuperAdmin) {
+      // SuperAdmin vede tutte le aree: recupera dal DB e si iscrive a tutte
+      const tutteLeAree = await prisma.area.findMany({ select: { id: true } });
+      tutteLeAree.forEach((a) => wsService.joinRoom(a.id, ws));
+      // Usa le aree reali per l'initial state
+      payload.aree = tutteLeAree.map((a) => a.id);
     } else {
       payload.aree.forEach((areaId) => wsService.joinRoom(areaId, ws));
     }
@@ -55,7 +63,7 @@ export function attachWebSocketServer(server: Server): void {
     logger.info(`WS connected: user=${payload.username} ruolo=${payload.ruolo}`);
 
     // Invia stato iniziale dal DB
-    sendInitialState(ws, payload.aree, isMonitor).catch((err) => {
+    sendInitialState(ws, payload.aree, isMonitor || isSuperAdmin).catch((err) => {
       logger.error('Errore invio INITIAL_STATE', { error: err });
     });
 
