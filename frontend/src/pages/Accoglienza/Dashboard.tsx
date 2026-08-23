@@ -85,29 +85,41 @@ export default function AccoglienzaDashboard() {
       const { ticket, pdf } = res.data;
       setLastTicket(ticket);
 
-      // Stampa automatica PDF con fallback più robusto
+      // Stampa automatica PDF senza aprire nuove pagine
       try {
         const pdfBytes = Uint8Array.from(atob(pdf), (c) => c.charCodeAt(0));
         const blob = new Blob([pdfBytes], { type: 'application/pdf' });
         const url = URL.createObjectURL(blob);
         
-        // Prova prima con window.open (potrebbero essere bloccati i popup)
-        const win = window.open(url, '_blank', 'width=800,height=600');
-        
-        if (win && !win.closed) {
-          // Se la finestra si apre, attendi che carichi e stampa
-          win.onload = () => {
-            setTimeout(() => {
-              win.print();
-              // Chiudi la finestra dopo la stampa (opzionale)
-              setTimeout(() => {
-                win.close();
-                URL.revokeObjectURL(url);
-              }, 1000);
-            }, 500);
+        // Usa iframe nascosto per stampa diretta
+        if (printRef.current) {
+          printRef.current.src = url;
+          printRef.current.onload = () => {
+            try {
+              const printWindow = printRef.current?.contentWindow;
+              if (printWindow) {
+                printWindow.print();
+                // Cleanup dopo stampa
+                setTimeout(() => {
+                  URL.revokeObjectURL(url);
+                  if (printRef.current) printRef.current.src = '';
+                }, 1000);
+              }
+            } catch (iframeError) {
+              console.warn('Stampa iframe fallita, uso download:', iframeError);
+              // Fallback: download automatico senza popup
+              const link = document.createElement('a');
+              link.href = url;
+              link.download = `ticket-${ticket.numero}.pdf`;
+              link.style.display = 'none';
+              document.body.appendChild(link);
+              link.click();
+              document.body.removeChild(link);
+              URL.revokeObjectURL(url);
+            }
           };
         } else {
-          // Se il popup è bloccato, usa download diretto
+          // Se iframe non disponibile, download diretto
           const link = document.createElement('a');
           link.href = url;
           link.download = `ticket-${ticket.numero}.pdf`;
@@ -115,12 +127,6 @@ export default function AccoglienzaDashboard() {
           document.body.appendChild(link);
           link.click();
           document.body.removeChild(link);
-          
-          // Inform user about download
-          setTimeout(() => {
-            setError(`Popup bloccato. PDF scaricato come ticket-${ticket.numero}.pdf - Apri e stampa manualmente.`);
-          }, 100);
-          
           URL.revokeObjectURL(url);
         }
       } catch (printError) {
@@ -221,8 +227,8 @@ export default function AccoglienzaDashboard() {
         )}
       </main>
 
-      {/* iframe nascosto per stampa — non usato ma lasciato per fallback */}
-      <iframe ref={printRef} style={{ display: 'none' }} title="print" />
+      {/* iframe per stampa diretta PDF senza aprire nuove finestre */}
+      <iframe ref={printRef} style={{ display: 'none' }} title="print-frame" />
     </div>
   );
 }
