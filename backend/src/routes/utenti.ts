@@ -353,4 +353,69 @@ router.post('/change-password', async (req: Request, res: Response, next: NextFu
   }
 });
 
+/**
+ * PATCH /api/utenti/me/stato
+ * Body: { stato: 'ATTIVO' | 'PAUSA' }
+ * Permette agli operatori di cambiare il proprio stato operativo
+ */
+router.patch('/me/stato', authorize('OPERATORE'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = req.user!;
+    const { stato } = req.body as { stato?: string };
+
+    if (!stato) {
+      res.status(400).json({ error: 'Campi obbligatori mancanti.', fields: ['stato'] });
+      return;
+    }
+
+    // Solo ATTIVO e PAUSA sono permessi per gli operatori (non DISABILITATO)
+    if (!['ATTIVO', 'PAUSA'].includes(stato)) {
+      res.status(400).json({ error: 'Stato non valido. Valori ammessi: ATTIVO, PAUSA' });
+      return;
+    }
+
+    // Verifica che l'utente sia effettivamente un operatore
+    const utente = await prisma.utente.findUnique({
+      where: { id: user.sub },
+      include: { 
+        utentiAree: true,
+        utentiRuoli: { include: { ruolo: true } }
+      },
+    });
+
+    if (!utente) {
+      res.status(404).json({ error: 'Utente non trovato.' });
+      return;
+    }
+
+    const hasOperatoreRole = utente.utentiRuoli.some((ur) => ur.ruolo.nome === 'OPERATORE');
+    if (!hasOperatoreRole) {
+      res.status(403).json({ error: 'Solo gli operatori possono modificare il proprio stato.' });
+      return;
+    }
+
+    // Aggiorna lo stato
+    const updatedUtente = await prisma.utente.update({
+      where: { id: user.sub },
+      data: { stato },
+      include: INCLUDE_UTENTE,
+    });
+
+    // Invia broadcast WebSocket a tutte le aree dell'operatore
+    const utenteAree = updatedUtente.utentiAree.map((ua) => ua.areaId);
+    utenteAree.forEach((areaId) => {
+      wsService.broadcastAll(areaId, {
+        type: 'STATO_OPERATORE',
+        utenteId: updatedUtente.id,
+        username: updatedUtente.username,
+        stato: stato as 'ATTIVO' | 'PAUSA' | 'DISABILITATO',
+      });
+    });
+
+    res.json(sanitize(updatedUtente));
+  } catch (err) {
+    next(err);
+  }
+});
+
 export default router;

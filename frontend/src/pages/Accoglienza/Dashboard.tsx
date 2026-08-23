@@ -85,16 +85,47 @@ export default function AccoglienzaDashboard() {
       const { ticket, pdf } = res.data;
       setLastTicket(ticket);
 
-      // Stampa automatica PDF (apre dialogo di stampa in nuova finestra)
-      const pdfBytes = Uint8Array.from(atob(pdf), (c) => c.charCodeAt(0));
-      const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-      const url = URL.createObjectURL(blob);
-      const win = window.open(url, '_blank');
-      if (win) {
-        win.onload = () => {
-          win.print();
+      // Stampa automatica PDF con fallback più robusto
+      try {
+        const pdfBytes = Uint8Array.from(atob(pdf), (c) => c.charCodeAt(0));
+        const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+        const url = URL.createObjectURL(blob);
+        
+        // Prova prima con window.open (potrebbero essere bloccati i popup)
+        const win = window.open(url, '_blank', 'width=800,height=600');
+        
+        if (win && !win.closed) {
+          // Se la finestra si apre, attendi che carichi e stampa
+          win.onload = () => {
+            setTimeout(() => {
+              win.print();
+              // Chiudi la finestra dopo la stampa (opzionale)
+              setTimeout(() => {
+                win.close();
+                URL.revokeObjectURL(url);
+              }, 1000);
+            }, 500);
+          };
+        } else {
+          // Se il popup è bloccato, usa download diretto
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = `ticket-${ticket.numero}.pdf`;
+          link.style.display = 'none';
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          
+          // Inform user about download
+          setTimeout(() => {
+            setError(`Popup bloccato. PDF scaricato come ticket-${ticket.numero}.pdf - Apri e stampa manualmente.`);
+          }, 100);
+          
           URL.revokeObjectURL(url);
-        };
+        }
+      } catch (printError) {
+        console.error('Errore stampa:', printError);
+        setError('Ticket emesso correttamente, ma errore durante la stampa. Riprova o contatta l\'amministratore.');
       }
     } catch (err: any) {
       setError(err?.response?.data?.error ?? 'Errore emissione ticket.');

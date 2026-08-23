@@ -3,12 +3,19 @@
 :root {
   --classic-border: #000000;
   --classic-bg: #ffffff;
-  --classic-header-bg: #f0f0f0;
-  --classic-red: #ff0000;
-  --classic-green: #008000;
-  --classic-blue: #0000ff;
-  --classic-black: #000000;
+  --classic-header-bg: #f8f9fa;
+  --classic-red: #dc3545;      /* Rosso più chiaro */
+  --classic-green: #28a745;    /* Verde più brillante */
+  --classic-blue: #007bff;     /* Blu più brillante */
+  --classic-black: #343a40;    /* Grigio scuro invece di nero */
   --classic-font: 'Tahoma', 'Helvetica', sans-serif;
+  
+  /* Nuovi colori per monitor */
+  --monitor-primary: #e74c3c;    /* Rosso brillante */
+  --monitor-secondary: #27ae60;  /* Verde brillante */
+  --monitor-tertiary: #3498db;   /* Blu brillante */
+  --monitor-text: #2c3e50;       /* Grigio scuro leggibile */
+  --monitor-bg: #ffffff;         /* Bianco puro */
 }
 
 /* Layout classico con header e footer */
@@ -278,141 +285,162 @@
 .classic-p-1 { padding: 10px; }
 .classic-p-2 { padding: 20px; }
 
-/* Stili specifici del monitor originale */
+/* Stili specifici del monitor originale - Versione con colori chiari */
 .posCommon {
   font-weight: bold;
   font-family: 'Tahoma', 'Helvetica', sans-serif;
   padding: 4px 20px;
+  background: var(--monitor-bg);
 }
 
 .posHeaderService {
   font-size: 30px;
-  color: black;
-  border-bottom: 3px solid black;
+  color: var(--monitor-text);
+  border-bottom: 3px solid var(--classic-border);
   padding: 4px 23px;
+  background: var(--classic-header-bg);
 }
 
 .posHeaderNumber {
   font-size: 30px;
-  color: black;
-  border-bottom: 3px solid black;
+  color: var(--monitor-text);
+  border-bottom: 3px solid var(--classic-border);
+  background: var(--classic-header-bg);
 }
 
 .posHeaderPost {
   font-size: 30px;
-  color: black;
-  border-bottom: 3px solid black;
+  color: var(--monitor-text);
+  border-bottom: 3px solid var(--classic-border);
+  background: var(--classic-header-bg);
 }
 
-/* Posizione 0 - Numero corrente (rosso, più grande) */
+/* Posizione 0 - Numero corrente (rosso brillante, più grande) */
 .pos0Service {
   font-size: 80px;
-  color: red;
+  color: var(--monitor-primary);
+  background: var(--monitor-bg);
 }
 
 .pos0Number {
   font-size: 80px;
-  color: red;
+  color: var(--monitor-primary);
+  background: var(--monitor-bg);
 }
 
 .pos0Post {
   font-size: 80px;
-  color: red;
+  color: var(--monitor-primary);
+  background: var(--monitor-bg);
 }
 
-/* Posizione 1 - Secondo numero (nero, grande) */
+/* Posizione 1 - Secondo numero (grigio scuro, grande) */
 .pos1Service {
   font-size: 70px;
-  color: black;
+  color: var(--monitor-text);
+  background: var(--monitor-bg);
 }
 
 .pos1Number {
   font-size: 70px;
-  color: black;
+  color: var(--monitor-text);
+  background: var(--monitor-bg);
 }
 
 .pos1Post {
   font-size: 70px;
-  color: black;
+  color: var(--monitor-text);
+  background: var(--monitor-bg);
 }
 
-/* Posizione 2 - Terzo numero (verde, medio) */
+/* Posizione 2 - Terzo numero (verde brillante, medio) */
 .pos2Service {
   font-size: 60px;
-  color: green;
+  color: var(--monitor-secondary);
   padding: 4px 21px;
+  background: var(--monitor-bg);
 }
 
 .pos2Number {
   font-size: 60px;
-  color: green;
+  color: var(--monitor-secondary);
   padding: 4px 21px;
+  background: var(--monitor-bg);
 }
 
 .pos2Post {
   font-size: 60px;
-  color: green;
+  color: var(--monitor-secondary);
   padding: 4px 21px;
+  background: var(--monitor-bg);
 }
 
-/* Posizione 3 - Quarto numero (blu, medio-piccolo) */
+/* Posizione 3 - Quarto numero (blu brillante, medio-piccolo) */
 .pos3Service {
   font-size: 55px;
-  color: blue;
+  color: var(--monitor-tertiary);
   padding: 4px 21px;
+  background: var(--monitor-bg);
 }
 
 .pos3Number {
   font-size: 55px;
-  color: blue;
+  color: var(--monitor-tertiary);
   padding: 4px 21px;
+  background: var(--monitor-bg);
 }
 
 .pos3Post {
   font-size: 55px;
-  color: blue;
+  color: var(--monitor-tertiary);
   padding: 4px 21px;
+  background: var(--monitor-bg);
 }
 
 /* Righe della tabella cronologia */
 .pos4Service {
   font-size: 30px;
-  color: black;
+  color: var(--monitor-text);
   padding: 4px 22px;
-  border-bottom: 1px solid black;
+  border-bottom: 1px solid #dee2e6;
+  background: var(--monitor-bg);
 }
 
 .pos4Number {
   font-size: 30px;
-  color: black;
+  color: var(--monitor-text);
   padding: 4px 22px;
-  border-bottom: 1px solid black;
+  border-bottom: 1px solid #dee2e6;
+  background: var(--monitor-bg);
 }
 
 .pos4Post {
   font-size: 30px;
-  color: black;
+  color: var(--monitor-text);
   padding: 4px 22px;
-  border-bottom: 1px solid black;
+  border-bottom: 1px solid #dee2e6;
+  background: var(--monitor-bg);
 }
 
 .pos4Stato {
   font-size: 20px;
-  color: black;
+  color: var(--monitor-text);
   padding: 4px 22px;
-  border-bottom: 1px solid black;
+  border-bottom: 1px solid #dee2e6;
+  background: var(--monitor-bg);
 }
 
 .posDate {
   font-weight: bold;
   font-family: 'Tahoma', 'Helvetica', sans-serif;
   font-size: 19px;
-  color: black;
-  border-bottom: 1px solid black;
+  color: var(--monitor-text);
+  border-bottom: 1px solid #dee2e6;
+  background: var(--monitor-bg);
 }
 
 .posAlternativeColor {
-  background-color: #f5f5f5;
+  background-color: #f8f9fa; /* Grigio chiarissimo per alternanza */
 }
 
 /* Responsive */

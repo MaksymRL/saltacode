@@ -62,7 +62,7 @@ export default function OperatoreDashboard() {
     setStateLoading(true);
     const nuovoStato = isPausa ? 'ATTIVO' : 'PAUSA';
     try {
-      await apiClient.patch(`/utenti/${user.id}`, { stato: nuovoStato });
+      await apiClient.patch('/utenti/me/stato', { stato: nuovoStato });
       setIsPausa(!isPausa);
       
       if (!isPausa) {
@@ -74,8 +74,9 @@ export default function OperatoreDashboard() {
         setPausaStartTime(null);
         setPausaDuration(0);
       }
-    } catch {
-      // ignora — UI torna allo stato precedente
+    } catch (err: any) {
+      // Mostra l'errore all'utente invece di ignorarlo silenziosamente
+      setError(err?.response?.data?.error ?? 'Errore cambio stato.');
     } finally {
       setStateLoading(false);
     }

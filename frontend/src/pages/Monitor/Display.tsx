@@ -19,7 +19,6 @@ interface ChiamataEntry {
  * TTS: annuncia il numero chiamato tramite Web Speech API
  */
 export default function MonitorDisplay() {
-  const [current, setCurrent] = useState<ChiamataEntry | null>(null);
   const [history, setHistory] = useState<ChiamataEntry[]>([]);
   const [connected, setConnected] = useState(false);
   const [ttsSupported] = useState('speechSynthesis' in window);
@@ -74,7 +73,6 @@ export default function MonitorDisplay() {
             postazione: msg['postazione'] as number,
             timestamp: msg['timestamp'] as string,
           };
-          setCurrent(entry);
           setHistory((prev) => [entry, ...prev].slice(0, 20)); // Mantieni fino a 20 elementi
           if (msg.type === 'NUMERO_CHIAMATO') {
             announce(entry);
@@ -84,7 +82,6 @@ export default function MonitorDisplay() {
         if (msg.type === 'INITIAL_STATE') {
           const ultimi = (msg['ultimiChiamati'] as ChiamataEntry[] | undefined) ?? [];
           setHistory(ultimi.slice(0, 20)); // Mantieni fino a 20 elementi
-          if (ultimi.length > 0) setCurrent(ultimi[0] ?? null);
         }
       } catch {
         // messaggio malformato — ignora
@@ -201,14 +198,14 @@ export default function MonitorDisplay() {
             </tr>
           </thead>
           <tbody>
-            {/* Prime 3 chiamate con colori speciali */}
+            {/* Prime 3 chiamate con colori speciali - versione chiara */}
             {history.slice(0, 3).map((entry, index) => (
               <tr key={index}>
                 <td 
                   className="posCommon pos4Service" 
                   style={{ 
                     textAlign: 'left',
-                    color: index === 0 ? 'red' : index === 1 ? 'green' : 'blue'
+                    color: index === 0 ? '#e74c3c' : index === 1 ? '#27ae60' : '#3498db' // Colori brillanti
                   }}
                 >
                   {entry.servizio}
@@ -217,7 +214,7 @@ export default function MonitorDisplay() {
                   className="posCommon pos4Number" 
                   style={{ 
                     textAlign: 'center',
-                    color: index === 0 ? 'red' : index === 1 ? 'green' : 'blue'
+                    color: index === 0 ? '#e74c3c' : index === 1 ? '#27ae60' : '#3498db' // Colori brillanti
                   }}
                 >
                   {entry.ticket}
@@ -226,7 +223,7 @@ export default function MonitorDisplay() {
                   className="posCommon pos4Post" 
                   style={{ 
                     textAlign: 'center',
-                    color: index === 0 ? 'red' : index === 1 ? 'green' : 'blue'
+                    color: index === 0 ? '#e74c3c' : index === 1 ? '#27ae60' : '#3498db' // Colori brillanti
                   }}
                 >
                   {entry.postazione}
@@ -235,7 +232,7 @@ export default function MonitorDisplay() {
                   className="posDate" 
                   style={{ 
                     textAlign: 'right',
-                    color: index === 0 ? 'red' : index === 1 ? 'green' : 'blue'
+                    color: index === 0 ? '#e74c3c' : index === 1 ? '#27ae60' : '#3498db' // Colori brillanti
                   }}
                 >
                   {new Date(entry.timestamp).toLocaleTimeString('it-IT', { 
@@ -285,7 +282,7 @@ export default function MonitorDisplay() {
           bottom: '10px', 
           right: '10px', 
           fontSize: '11px',
-          color: connected ? '#22c55e' : '#ef4444'
+          color: connected ? '#27ae60' : '#e74c3c' // Verde brillante / rosso brillante
         }}>
           {connected ? '● CONNESSO' : '● RICONNESSIONE…'}
         </div>
@@ -329,7 +326,7 @@ function Clock() {
       right: '20px',
       fontFamily: 'monospace', 
       fontSize: '22px', 
-      color: '#000',  // Nero per il background bianco
+      color: '#2c3e50',  // Grigio scuro leggibile su sfondo bianco
       letterSpacing: '2px',
       fontWeight: 'bold'
     }}>

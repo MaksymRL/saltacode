@@ -42,7 +42,7 @@ interface CodaState {
 type Tab = 'code' | 'servizi' | 'utenti';
 
 // Ruoli che un Admin può assegnare agli utenti della propria area
-const RUOLI_ADMIN = ['ADMIN', 'ACCOGLIENZA', 'OPERATORE'];
+const RUOLI_ADMIN = ['ACCOGLIENZA', 'OPERATORE'];
 
 export default function AdminDashboard() {
   const { user, login, logout } = useAuth();
