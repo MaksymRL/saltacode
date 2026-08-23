@@ -15,6 +15,11 @@ export const config = {
     url: required('DATABASE_URL'),
   },
 
+  // Legacy alias for backward compatibility
+  database: {
+    url: required('DATABASE_URL'),
+  },
+
   jwt: {
     secret: required('JWT_SECRET'),
     expiresIn: '60m' as const,
