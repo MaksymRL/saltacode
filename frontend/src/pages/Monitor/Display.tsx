@@ -20,6 +20,7 @@ export default function MonitorDisplay() {
   const [history, setHistory] = useState<ChiamataEntry[]>([]);
   const [connected, setConnected] = useState(false);
   const [ttsSupported] = useState('speechSynthesis' in window);
+  const [audioEnabled, setAudioEnabled] = useState(true);
   const [time, setTime] = useState(new Date());
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -34,15 +35,27 @@ export default function MonitorDisplay() {
   }, []);
 
   const announce = useCallback((entry: ChiamataEntry) => {
-    if (!('speechSynthesis' in window)) return;
-    const text = `Servizio ${entry.servizio}, numero ${entry.ticket.split('').join(' ')}, postazione ${entry.postazione}`;
+    if (!('speechSynthesis' in window) || !audioEnabled) return;
+    
+    // Cancel any previous announcements
+    window.speechSynthesis.cancel();
+    
+    // Extract the number part from the ticket (remove letters)
+    const numeroSolo = entry.ticket.replace(/[A-Z]/g, '');
+    const numeroSpaced = numeroSolo.split('').join(' ');
+    
+    const text = `Numero ${numeroSpaced}, servizio ${entry.servizio}, postazione ${entry.postazione}`;
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = 'it-IT';
-    utterance.rate = 0.85;
-    utterance.pitch = 1;
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(utterance);
-  }, []);
+    utterance.rate = 0.8;
+    utterance.volume = 0.9;
+    utterance.pitch = 1.0;
+    
+    // Add some delay to ensure the announcement is clear
+    setTimeout(() => {
+      window.speechSynthesis.speak(utterance);
+    }, 100);
+  }, [audioEnabled]);
 
   const connect = useCallback(async () => {
     if (!mountedRef.current) return;
@@ -73,8 +86,10 @@ export default function MonitorDisplay() {
             postazione: msg['postazione'] as number,
             timestamp: msg['timestamp'] as string,
           };
-          setHistory((prev) => [entry, ...prev].slice(0, 20));
-          if (msg.type === 'NUMERO_CHIAMATO') announce(entry);
+          setHistory((prev) => [entry, ...prev].slice(0, 20)); // Mantieni fino a 20 elementi
+          
+          // Announce both new calls and recalled numbers
+          announce(entry);
         }
         if (msg.type === 'INITIAL_STATE') {
           const ultimi = (msg['ultimiChiamati'] as ChiamataEntry[] | undefined) ?? [];
@@ -214,8 +229,78 @@ export default function MonitorDisplay() {
               ))}
             </tbody>
           </table>
+
+        {/* Audio controls in top left */}
+        <div style={{ 
+          position: 'fixed', 
+          top: '16px', 
+          left: '20px',
+          display: 'flex',
+          gap: '10px',
+          alignItems: 'center'
+        }}>
+          <button
+            onClick={() => setAudioEnabled(!audioEnabled)}
+            style={{
+              background: audioEnabled ? '#27ae60' : '#e74c3c',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              padding: '8px 12px',
+              fontSize: '12px',
+              fontWeight: 'bold',
+              cursor: 'pointer'
+            }}
+            title={audioEnabled ? 'Disabilita audio' : 'Abilita audio'}
+          >
+            {audioEnabled ? '🔊 Audio ON' : '🔇 Audio OFF'}
+          </button>
+          
+          {ttsSupported && (
+            <button
+              onClick={() => {
+                const testEntry: ChiamataEntry = {
+                  ticket: 'A123',
+                  servizio: 'Test Service',
+                  postazione: 1,
+                  timestamp: new Date().toISOString()
+                };
+                announce(testEntry);
+              }}
+              style={{
+                background: '#3498db',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                padding: '8px 12px',
+                fontSize: '12px',
+                fontWeight: 'bold',
+                cursor: 'pointer'
+              }}
+              title="Test audio announcement"
+            >
+              🎵 Test Audio
+            </button>
+          )}
+        </div>
         </div>
 
+        {/* Indicatore audio se non supportato o disabilitato */}
+        {(!ttsSupported || !audioEnabled) && (
+          <div style={{ 
+            position: 'fixed', 
+            bottom: '30px', 
+            right: '10px',
+            background: !ttsSupported ? '#e74c3c' : '#f59e0b',
+            color: '#fff',
+            padding: '4px 8px',
+            fontSize: '11px',
+            fontWeight: 'bold',
+            borderRadius: '4px'
+          }}>
+            {!ttsSupported ? '⚠ TTS non supportato' : '🔇 Audio disabilitato'}
+          </div>
+        )}
       </div>
 
       {/* ── FOOTER ── */}
