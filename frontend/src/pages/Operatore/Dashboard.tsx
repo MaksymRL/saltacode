@@ -30,6 +30,7 @@ interface OperatoreStato {
   cognome: string;
   nome: string;
   stato: 'ATTIVO' | 'PAUSA' | 'DISABILITATO';
+  postazione?: number | null;
 }
 
 export default function OperatoreDashboard() {
@@ -153,9 +154,9 @@ export default function OperatoreDashboard() {
     }
     // Aggiorna lo stato dei colleghi in tempo reale
     if (msg.type === 'STATO_OPERATORE') {
-      const { utenteId, stato } = msg as unknown as { utenteId: number; stato: 'ATTIVO' | 'PAUSA' | 'DISABILITATO' };
+      const { utenteId, stato, postazione } = msg as unknown as { utenteId: number; stato: 'ATTIVO' | 'PAUSA' | 'DISABILITATO'; postazione?: number | null };
       setColleghi((prev) =>
-        prev.map((c) => c.id === utenteId ? { ...c, stato } : c)
+        prev.map((c) => c.id === utenteId ? { ...c, stato, postazione: postazione ?? c.postazione } : c)
       );
     }
   }, []);
@@ -504,6 +505,7 @@ export default function OperatoreDashboard() {
                     </div>
                     <div style={{ fontSize: 12, color: op.stato === 'ATTIVO' ? '#16a34a' : '#d97706', fontWeight: 600 }}>
                       {op.stato === 'ATTIVO' ? '● Attivo' : '⏸ In pausa'}
+                      {op.postazione ? ` — Post. ${op.postazione}` : ''}
                     </div>
                   </div>
                 </div>

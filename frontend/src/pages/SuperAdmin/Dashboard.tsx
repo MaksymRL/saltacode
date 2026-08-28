@@ -195,7 +195,7 @@ export default function SuperAdminDashboard() {
   const [utentiError, setUtentiError] = useState('');
   const [utentiSuccess, setUtentiSuccess] = useState('');
   const [nuovoUtente, setNuovoUtente] = useState({
-    cognome: '', nome: '', ruoliSelezionati: [] as string[], aree: [] as number[],
+    cognome: '', nome: '', ruoliSelezionati: [] as string[], aree: [] as number[], password: '',
   });
   const [tempPwd, setTempPwd] = useState<string | null>(null);
 
@@ -233,14 +233,20 @@ export default function SuperAdminDashboard() {
     e.preventDefault();
     setUtentiError(''); setUtentiSuccess(''); setTempPwd(null);
     try {
-      const res = await apiClient.post<Utente & { tempPassword: string }>('/utenti', {
+      const res = await apiClient.post<Utente & { tempPassword: string | null }>('/utenti', {
         cognome: nuovoUtente.cognome,
         nome: nuovoUtente.nome,
         ruoli: nuovoUtente.ruoliSelezionati,
         aree: nuovoUtente.aree,
+        ...(nuovoUtente.password.trim() ? { password: nuovoUtente.password.trim() } : {}),
       });
-      setTempPwd(res.data.tempPassword);
-      setNuovoUtente({ cognome: '', nome: '', ruoliSelezionati: [], aree: [] });
+      setTempPwd(res.data.tempPassword ?? null);
+      if (!nuovoUtente.password.trim()) {
+        setUtentiSuccess('');  // il banner tempPwd già mostra il messaggio
+      } else {
+        setUtentiSuccess('Utente creato con la password impostata. Può accedere subito.');
+      }
+      setNuovoUtente({ cognome: '', nome: '', ruoliSelezionati: [], aree: [], password: '' });
       loadUtenti();
     } catch (err: any) {
       setUtentiError(err?.response?.data?.error ?? 'Errore creazione utente.');
@@ -603,13 +609,21 @@ export default function SuperAdminDashboard() {
 
             {tempPwd && (
               <div style={{ ...cardStyle, background: '#fffbeb', border: '1px solid #f59e0b' }}>
-                <strong>⚠️ Credenziali temporanee (mostra una sola volta):</strong>
+                <strong>⚠️ Password temporanea generata (mostra una sola volta):</strong>
                 <p style={{ fontFamily: 'monospace', fontSize: 16, margin: '8px 0 0' }}>
                   Password: <strong>{tempPwd}</strong>
+                </p>
+                <p style={{ fontSize: 12, color: '#92400e', margin: '4px 0 0' }}>
+                  L'utente dovrà cambiarla al primo accesso.
                 </p>
                 <button onClick={() => setTempPwd(null)} style={{ ...btnStyle('#6b7280', 'small'), marginTop: 8 }}>
                   Chiudi
                 </button>
+              </div>
+            )}
+            {utentiSuccess && !tempPwd && (
+              <div style={{ ...cardStyle, background: '#f0fdf4', border: '1px solid #86efac' }}>
+                <strong style={{ color: '#166534' }}>✅ {utentiSuccess}</strong>
               </div>
             )}
 
@@ -629,6 +643,17 @@ export default function SuperAdminDashboard() {
                     <input style={inputStyle} value={nuovoUtente.nome}
                       onChange={(e) => setNuovoUtente((p) => ({ ...p, nome: e.target.value }))}
                       placeholder="Mario" required />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Password <span style={{ color: '#9ca3af', fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>(opzionale — lascia vuoto per generarla)</span></label>
+                    <input
+                      type="password"
+                      style={inputStyle}
+                      value={nuovoUtente.password}
+                      onChange={(e) => setNuovoUtente((p) => ({ ...p, password: e.target.value }))}
+                      placeholder="Min. 10 car., 1 maiuscola, 1 speciale"
+                      autoComplete="new-password"
+                    />
                   </div>
                 </div>
                 <div style={{ marginBottom: 12 }}>

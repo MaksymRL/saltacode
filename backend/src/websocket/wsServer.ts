@@ -101,13 +101,14 @@ export function attachWebSocketServer(server: Server): void {
  * - ultimiChiamati: ultimi 10 numeri chiamati (globali per il monitor, per area per gli altri)
  */
 async function sendInitialState(ws: WebSocket, aree: number[], isMonitor: boolean): Promise<void> {
-  // Ultimi 10 chiamati (per area se non monitor, globali se monitor)
+  // Ultimi 10 chiamati con numero ticket reale
   const ultimiChiamati = await prisma.chiamata.findMany({
     where: isMonitor ? {} : { servizio: { areaId: { in: aree } } },
     orderBy: { timestamp: 'desc' },
     take: 10,
     include: {
-      servizio: { select: { nome: true } },
+      servizio: { select: { nome: true, lettera: true, area: { select: { prefisso: true } } } },
+      ticket:   { select: { numero: true } },
     },
   });
 
@@ -135,12 +136,42 @@ async function sendInitialState(ws: WebSocket, aree: number[], isMonitor: boolea
     count: c._count._all,
   }));
 
+  // Postazioni attive: ultima chiamata per ogni operatore in stato ATTIVO/PAUSA
+  const operatoriAttivi = await prisma.utente.findMany({
+    where: {
+      stato: { in: ['ATTIVO', 'PAUSA'] },
+      utentiRuoli: { some: { ruolo: { nome: 'OPERATORE' } } },
+      ...(isMonitor ? {} : { utentiAree: { some: { areaId: { in: aree } } } }),
+    },
+    select: {
+      id: true,
+      username: true,
+      cognome: true,
+      nome: true,
+      stato: true,
+      chiamate: {
+        orderBy: { timestamp: 'desc' },
+        take: 1,
+        select: { postazione: true },
+      },
+    },
+  });
+
+  const postazioni = operatoriAttivi.map((op) => ({
+    utenteId: op.id,
+    username: op.username,
+    cognome: op.cognome,
+    nome: op.nome,
+    stato: op.stato,
+    postazione: op.chiamate[0]?.postazione ?? null,
+  }));
+
   const initialState = {
     type: 'INITIAL_STATE' as const,
-    postazioni: [], // operatori attivi — esteso in futuro con tabella sessioni
+    postazioni,
     code,
     ultimiChiamati: ultimiChiamati.map((ch) => ({
-      ticket: `#${ch.id}`, // il numero del ticket è nel ticket correlato — usiamo l'id come fallback
+      ticket: ch.ticket?.numero ?? `#${ch.id}`,
       postazione: ch.postazione,
       servizio: ch.servizio.nome,
       timestamp: ch.timestamp.toISOString(),

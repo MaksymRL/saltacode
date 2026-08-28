@@ -4,6 +4,15 @@ import { useWebSocket } from '../../hooks/useWebSocket';
 import apiClient from '../../api/client';
 import RoleSwitcher from '../../components/RoleSwitcher';
 
+interface OperatoreStato {
+  id: number;
+  username: string;
+  cognome: string;
+  nome: string;
+  stato: 'ATTIVO' | 'PAUSA' | 'DISABILITATO';
+  postazione?: number | null;
+}
+
 interface Servizio {
   id: number;
   nome: string;
@@ -55,7 +64,7 @@ export default function AccoglienzaDashboard() {
     loadServizi();
   }, [loadServizi]);
 
-  // WebSocket — aggiornamento code in real-time
+  // WebSocket — aggiornamento code + stato operatori in real-time
   const handleWsMessage = useCallback((msg: { type: string; [key: string]: unknown }) => {
     if (msg.type === 'INITIAL_STATE') {
       const wsCode = (msg['code'] as CodaState[]) ?? [];
@@ -75,9 +84,29 @@ export default function AccoglienzaDashboard() {
         prev.map((c) => c.servizioId === servizioId ? { ...c, count: Math.max(0, c.count - 1) } : c)
       );
     }
+    if (msg.type === 'STATO_OPERATORE') {
+      const { utenteId, stato, postazione } = msg as unknown as {
+        utenteId: number; stato: 'ATTIVO' | 'PAUSA' | 'DISABILITATO'; postazione?: number | null;
+      };
+      setOperatori((prev) =>
+        prev.map((op) => op.id === utenteId ? { ...op, stato, postazione: postazione ?? op.postazione } : op)
+      );
+    }
   }, []);
 
   useWebSocket({ onMessage: handleWsMessage });
+
+  // ── Operatori dell'area ───────────────────────────────────────────────────
+  const [operatori, setOperatori] = useState<OperatoreStato[]>([]);
+
+  const loadOperatori = useCallback(async () => {
+    try {
+      const res = await apiClient.get<OperatoreStato[]>('/utenti/operatori');
+      setOperatori(res.data);
+    } catch { /* non bloccante */ }
+  }, []);
+
+  useEffect(() => { loadOperatori(); }, [loadOperatori]);
 
   // Emetti ticket e stampa PDF
   const handleEmittiTicket = async (servizioId: number) => {
@@ -244,6 +273,53 @@ export default function AccoglienzaDashboard() {
           </div>
         )}
       </main>
+
+      {/* Pannello operatori */}
+      {operatori.length > 0 && (
+        <div style={{ padding: '0 24px 24px', maxWidth: 900, margin: '0 auto' }}>
+          <div style={{
+            background: 'white', borderRadius: 10,
+            border: '1px solid #e2e8f0',
+            boxShadow: '0 1px 4px rgba(0,0,0,0.05)',
+            overflow: 'hidden',
+          }}>
+            <div style={{
+              padding: '10px 20px',
+              background: '#f8fafc',
+              borderBottom: '1px solid #e2e8f0',
+              fontSize: 12, fontWeight: 700, color: '#475569',
+              letterSpacing: 1, textTransform: 'uppercase',
+            }}>
+              👥 Operatori ({operatori.length})
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap' }}>
+              {operatori.map((op, i) => (
+                <div key={op.id} style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '10px 20px', flex: '1 1 200px',
+                  borderRight: i % 2 === 0 ? '1px solid #f1f5f9' : 'none',
+                  borderBottom: '1px solid #f1f5f9',
+                }}>
+                  <div style={{
+                    width: 10, height: 10, borderRadius: '50%', flexShrink: 0,
+                    background: op.stato === 'ATTIVO' ? '#22c55e' : '#f59e0b',
+                    boxShadow: op.stato === 'ATTIVO' ? '0 0 6px rgba(34,197,94,0.5)' : '0 0 6px rgba(245,158,11,0.5)',
+                  }} />
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 13, color: '#1e293b' }}>
+                      {op.cognome} {op.nome}
+                    </div>
+                    <div style={{ fontSize: 11, color: op.stato === 'ATTIVO' ? '#16a34a' : '#d97706', fontWeight: 600 }}>
+                      {op.stato === 'ATTIVO' ? '● Attivo' : '⏸ In pausa'}
+                      {op.postazione ? ` — Post. ${op.postazione}` : ''}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* iframe per stampa diretta PDF senza aprire nuove finestre */}
       <iframe ref={printRef} style={{ display: 'none' }} title="print-frame" />

@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { loginRateLimiter, recordFailedAttempt, resetAttempts } from '../middleware/rateLimiter.js';
 import { authenticate } from '../middleware/auth.js';
 import * as authService from '../services/authService.js';
+import { prisma } from '../prisma/client.js';
 
 const router = Router();
 
@@ -64,6 +65,12 @@ router.post('/select-role', async (req: Request, res: Response, next: NextFuncti
       return;
     }
 
+    // Imposta stato ATTIVO al momento dell'accesso effettivo
+    await prisma.utente.update({
+      where: { id: result.user.id },
+      data: { stato: 'ATTIVO' },
+    });
+
     res.json(result);
   } catch (err) {
     next(err);
@@ -72,11 +79,18 @@ router.post('/select-role', async (req: Request, res: Response, next: NextFuncti
 
 /**
  * POST /api/auth/logout
- * Invalida la sessione lato client.
- * (In produzione multi-server usare una blacklist Redis)
+ * Imposta lo stato utente a OFFLINE nel DB.
  */
-router.post('/logout', authenticate, (_req: Request, res: Response) => {
-  res.json({ message: 'Logout effettuato.' });
+router.post('/logout', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    await prisma.utente.update({
+      where: { id: req.user!.sub },
+      data: { stato: 'OFFLINE' },
+    });
+    res.json({ message: 'Logout effettuato.' });
+  } catch (err) {
+    next(err);
+  }
 });
 
 /**

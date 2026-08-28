@@ -31,7 +31,7 @@ router.get('/operatori', authorize('SUPERADMIN', 'ADMIN', 'ACCOGLIENZA', 'OPERAT
       where: {
         utentiRuoli: { some: { ruolo: { nome: 'OPERATORE' } } },
         utentiAree: { some: { areaId: { in: aree } } },
-        stato: { not: 'DISABILITATO' },
+        stato: { notIn: ['DISABILITATO', 'OFFLINE'] },
       },
       select: {
         id: true,
@@ -40,10 +40,23 @@ router.get('/operatori', authorize('SUPERADMIN', 'ADMIN', 'ACCOGLIENZA', 'OPERAT
         nome: true,
         stato: true,
         utentiAree: { select: { areaId: true } },
+        chiamate: {
+          orderBy: { timestamp: 'desc' },
+          take: 1,
+          select: { postazione: true },
+        },
       },
       orderBy: [{ cognome: 'asc' }, { nome: 'asc' }],
     });
-    res.json(operatori);
+    res.json(operatori.map((op) => ({
+      id: op.id,
+      username: op.username,
+      cognome: op.cognome,
+      nome: op.nome,
+      stato: op.stato,
+      postazione: op.chiamate[0]?.postazione ?? null,
+      utentiAree: op.utentiAree,
+    })));
   } catch (err) {
     next(err);
   }
@@ -82,11 +95,12 @@ router.get('/', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res: Resp
  */
 router.post('/', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { cognome, nome, ruoli: ruoliRichiesti, aree } = req.body as {
+    const { cognome, nome, ruoli: ruoliRichiesti, aree, password: passwordCustom } = req.body as {
       cognome?: string;
       nome?: string;
       ruoli?: string[];
       aree?: number[];
+      password?: string;
     };
 
     const missing: string[] = [];
@@ -138,8 +152,18 @@ router.post('/', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res: Res
       }
     }
 
-    const tempPassword = authService.generateTempPassword();
-    const passwordHash = await authService.hashPassword(tempPassword);
+    // Valida password personalizzata se fornita
+    if (passwordCustom && !authService.validatePassword(passwordCustom)) {
+      res.status(400).json({
+        error: 'La password non rispetta la policy: minimo 10 caratteri, 1 maiuscola, 1 carattere speciale.',
+      });
+      return;
+    }
+
+    const tempPassword = passwordCustom ? undefined : authService.generateTempPassword();
+    const passwordDaUsare = passwordCustom ?? tempPassword!;
+    const passwordHash = await authService.hashPassword(passwordDaUsare);
+    const mustChangePwd = !passwordCustom; // se l'admin imposta la password, non forza il cambio
 
     const utente = await prisma.utente.create({
       data: {
@@ -147,7 +171,7 @@ router.post('/', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res: Res
         cognome: cognome!.trim(),
         nome: nome!.trim(),
         passwordHash,
-        mustChangePwd: true,
+        mustChangePwd: mustChangePwd,
         stato: 'ATTIVO',
         utentiRuoli: {
           create: ruoliDB.map((r) => ({ ruoloId: r.id })),
@@ -159,7 +183,7 @@ router.post('/', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res: Res
       include: INCLUDE_UTENTE,
     });
 
-    res.status(201).json({ ...sanitize(utente), tempPassword });
+    res.status(201).json({ ...sanitize(utente), tempPassword: tempPassword ?? null });
   } catch (err: any) {
     if (err?.code === 'P2002') {
       res.status(409).json({ error: 'Username già in uso.' });
@@ -494,6 +518,13 @@ router.patch('/me/stato', async (req: Request, res: Response, next: NextFunction
       include: INCLUDE_UTENTE,
     });
 
+    // Recupera l'ultima postazione usata dall'operatore
+    const ultimaChiamata = await prisma.chiamata.findFirst({
+      where: { utenteId: user.sub },
+      orderBy: { timestamp: 'desc' },
+      select: { postazione: true },
+    });
+
     // Invia broadcast WebSocket a tutte le aree dell'operatore
     const utenteAree = updatedUtente.utentiAree.map((ua) => ua.areaId);
     utenteAree.forEach((areaId) => {
@@ -502,6 +533,7 @@ router.patch('/me/stato', async (req: Request, res: Response, next: NextFunction
         utenteId: updatedUtente.id,
         username: updatedUtente.username,
         stato: stato as 'ATTIVO' | 'PAUSA' | 'DISABILITATO',
+        postazione: ultimaChiamata?.postazione ?? null,
       });
     });
 

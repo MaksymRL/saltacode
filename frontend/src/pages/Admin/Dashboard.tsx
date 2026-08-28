@@ -131,7 +131,7 @@ export default function AdminDashboard() {
 
   // Nuovo utente
   const [nuovoUtente, setNuovoUtente] = useState({
-    cognome: '', nome: '', ruoliSelezionati: ['OPERATORE'] as string[],
+    cognome: '', nome: '', ruoliSelezionati: ['OPERATORE'] as string[], password: '',
   });
 
   // Editing ruoli utente esistente
@@ -171,14 +171,19 @@ export default function AdminDashboard() {
     try {
       const areaId = user?.aree[0];
       if (!areaId) { setUtentiError('Nessuna area assegnata.'); return; }
-      const res = await apiClient.post<Utente & { tempPassword: string }>('/utenti', {
+      const res = await apiClient.post<Utente & { tempPassword: string | null }>('/utenti', {
         cognome: nuovoUtente.cognome,
         nome: nuovoUtente.nome,
         ruoli: nuovoUtente.ruoliSelezionati,
         aree: [areaId],
+        ...(nuovoUtente.password.trim() ? { password: nuovoUtente.password.trim() } : {}),
       });
-      setTempPwd({ username: res.data.username, pwd: res.data.tempPassword });
-      setNuovoUtente({ cognome: '', nome: '', ruoliSelezionati: ['OPERATORE'] });
+      if (res.data.tempPassword) {
+        setTempPwd({ username: res.data.username, pwd: res.data.tempPassword });
+      } else {
+        setUtentiSuccess('Utente creato con la password impostata. Può accedere subito.');
+      }
+      setNuovoUtente({ cognome: '', nome: '', ruoliSelezionati: ['OPERATORE'], password: '' });
       loadUtenti();
     } catch (err: any) {
       setUtentiError(err?.response?.data?.error ?? 'Errore creazione utente.');
@@ -501,6 +506,17 @@ export default function AdminDashboard() {
                     <input style={inputStyle} value={nuovoUtente.nome}
                       onChange={(e) => setNuovoUtente((p) => ({ ...p, nome: e.target.value }))}
                       placeholder="Mario" required />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Password <span style={{ color: '#9ca3af', fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>(opzionale)</span></label>
+                    <input
+                      type="password"
+                      style={inputStyle}
+                      value={nuovoUtente.password}
+                      onChange={(e) => setNuovoUtente((p) => ({ ...p, password: e.target.value }))}
+                      placeholder="Lascia vuoto per generarla"
+                      autoComplete="new-password"
+                    />
                   </div>
                 </div>
                 <div style={{ marginBottom: 12 }}>

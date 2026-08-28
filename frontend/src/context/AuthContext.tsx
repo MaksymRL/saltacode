@@ -68,6 +68,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const logout = useCallback(() => {
+    // Notifica il backend (fire-and-forget, non blocca il logout locale)
+    const token = localStorage.getItem('saltacode_token');
+    if (token) {
+      fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      }).catch(() => { /* ignora errori di rete */ });
+    }
     localStorage.removeItem('saltacode_token');
     localStorage.removeItem('saltacode_user');
     localStorage.removeItem('saltacode_ruoli');
