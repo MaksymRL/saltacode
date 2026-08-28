@@ -11,32 +11,25 @@ router.use(authenticate);
 /**
  * POST /api/chiamate
  * Roles: OPERATORE
- * Body: { servizioId: number, postazione: number }
- * Response: { chiamata: { id, ticketNumero, postazione, timestamp } }
- *
- * Logica:
- * 1. Verifica che la postazione sia valida (1-99)
- * 2. Estrae il primo ticket ATTESA dalla coda (ordinato per emessoPer ASC)
- * 3. Salva la Chiamata nel DB
- * 4. Aggiorna lo stato del Ticket a CHIAMATO
- * 5. Invia evento WebSocket NUMERO_CHIAMATO a tutti i client dell'area + Monitor
+ * Body: { servizioId: number, postazione: string }
+ * Postazione: 1-2 cifre + lettera opzionale (es. "1", "12", "3A", "12B")
  */
 router.post('/', authorize('OPERATORE'), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { servizioId, postazione } = req.body as { servizioId?: number; postazione?: number };
+    const { servizioId, postazione } = req.body as { servizioId?: number; postazione?: string };
 
     if (!servizioId || !postazione) {
       res.status(400).json({ error: 'Campi obbligatori mancanti.', fields: ['servizioId', 'postazione'] });
       return;
     }
 
-    const posNum = Number(postazione);
-    if (posNum < 1 || posNum > 99) {
-      res.status(400).json({ error: 'La postazione deve essere un numero tra 1 e 99.' });
+    const posStr = String(postazione).toUpperCase().trim();
+    if (!/^\d{1,2}[A-Z]?$/.test(posStr)) {
+      res.status(400).json({ error: 'Postazione non valida. Formato: 1-2 cifre + lettera opzionale (es. 1, 12, 3A).' });
       return;
     }
 
-    const result = await queueService.callNext(Number(servizioId), posNum, req.user!.sub);
+    const result = await queueService.callNext(Number(servizioId), posStr, req.user!.sub);
 
     if (!result) {
       res.status(204).json({ message: 'Nessun ticket in attesa per questo servizio.' });
@@ -71,16 +64,16 @@ router.post('/', authorize('OPERATORE'), async (req: Request, res: Response, nex
  */
 router.post('/recall', authorize('OPERATORE'), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { ticketNumero, postazione } = req.body as { ticketNumero?: string; postazione?: number };
+    const { ticketNumero, postazione } = req.body as { ticketNumero?: string; postazione?: string };
 
     if (!ticketNumero || !postazione) {
       res.status(400).json({ error: 'Campi obbligatori mancanti.', fields: ['ticketNumero', 'postazione'] });
       return;
     }
 
-    const posNum = Number(postazione);
-    if (posNum < 1 || posNum > 99) {
-      res.status(400).json({ error: 'La postazione deve essere un numero tra 1 e 99.' });
+    const posStr = String(postazione).toUpperCase().trim();
+    if (!/^\d{1,2}[A-Z]?$/.test(posStr)) {
+      res.status(400).json({ error: 'Postazione non valida. Formato: 1-2 cifre + lettera opzionale.' });
       return;
     }
 
@@ -107,7 +100,7 @@ router.post('/recall', authorize('OPERATORE'), async (req: Request, res: Respons
         utenteId: req.user!.sub, 
         servizioId: ticket.servizioId, 
         ticketId: ticket.id, 
-        postazione: posNum 
+        postazione: posStr,
       },
     });
 
@@ -115,7 +108,7 @@ router.post('/recall', authorize('OPERATORE'), async (req: Request, res: Respons
     wsService.broadcastAll(ticket.servizio.areaId, {
       type: 'NUMERO_RICHIAMATO',
       ticket: ticket.numero,
-      postazione: posNum,
+      postazione: posStr,
       servizio: ticket.servizio.nome,
       timestamp: new Date().toISOString(),
     });
@@ -124,7 +117,7 @@ router.post('/recall', authorize('OPERATORE'), async (req: Request, res: Respons
       chiamata: {
         id: chiamata.id,
         ticketNumero: ticket.numero,
-        postazione: posNum,
+        postazione: posStr,
         timestamp: chiamata.timestamp.toISOString(),
       },
     });

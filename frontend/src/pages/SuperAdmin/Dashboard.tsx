@@ -735,7 +735,7 @@ export default function SuperAdminDashboard() {
                                   <label key={a.id} style={chipStyle(editingAree.aree.includes(a.id))}>
                                     <input type="checkbox" checked={editingAree.aree.includes(a.id)}
                                       onChange={() => toggleAreaEditing(a.id)} style={{ display: 'none' }} />
-                                    {a.prefisso}
+                                    {a.prefisso} — {a.nome}
                                   </label>
                                 ))}
                               </div>
@@ -743,7 +743,7 @@ export default function SuperAdminDashboard() {
                               <span style={{ fontSize: 12, fontWeight: 600, color: '#555' }}>
                                 {u.utentiAree.map((ua) => {
                                   const area = aree.find((a) => a.id === ua.areaId);
-                                  return area?.prefisso;
+                                  return area ? `${area.prefisso} — ${area.nome}` : null;
                                 }).filter(Boolean).join(', ')}
                               </span>
                             )}

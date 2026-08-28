@@ -3,35 +3,57 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 interface ChiamataEntry {
   ticket: string;
   servizio: string;
-  postazione: number;
+  postazione: string;
   timestamp: string;
 }
 
-/**
- * Monitor pubblico — ottimizzato per TV/schermo grande.
- *
- * Layout:
- * - Header: logo + orologio
- * - Sinistra (65%): numero corrente in enorme + i 2 precedenti
- * - Destra (35%): tabella cronologia ultimi 15
- * - Footer: barra colore con stato connessione
- */
 export default function MonitorDisplay() {
   const [history, setHistory] = useState<ChiamataEntry[]>([]);
   const [connected, setConnected] = useState(false);
+  const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [ttsSupported] = useState('speechSynthesis' in window);
-  const [audioEnabled, setAudioEnabled] = useState(true);
   const [time, setTime] = useState(new Date());
 
   const wsRef = useRef<WebSocket | null>(null);
   const retryCountRef = useRef(0);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
+  const audioCtxRef = useRef<AudioContext | null>(null);
 
-  // Orologio
+  // ── Orologio ─────────────────────────────────────────────────────────────
   useEffect(() => {
     const t = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(t);
+  }, []);
+
+  // ── Plim con AudioContext (non disabilitabile) ─────────────────────────────
+  const playPlim = useCallback(() => {
+    try {
+      if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
+        audioCtxRef.current = new AudioContext();
+      }
+      const ctx = audioCtxRef.current;
+      if (ctx.state === 'suspended') ctx.resume();
+
+      // Due toni brevi (plim plim)
+      const playTone = (startTime: number, freq: number, duration: number) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0, startTime);
+        gain.gain.linearRampToValueAtTime(0.6, startTime + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+        osc.start(startTime);
+        osc.stop(startTime + duration);
+      };
+
+      const now = ctx.currentTime;
+      playTone(now,        880, 0.18); // primo plim (La5)
+      playTone(now + 0.22, 1047, 0.18); // secondo plim (Do6)
+    } catch { /* ignora errori audio */ }
   }, []);
 
   // ── Coda TTS serializzata ─────────────────────────────────────────────────
@@ -51,30 +73,32 @@ export default function MonitorDisplay() {
     utterance.volume = 1.0;
     utterance.pitch = 1.0;
 
-    utterance.onend = () => {
-      ttsSpeakingRef.current = false;
-      setTimeout(ttsProcessQueue, 400);
-    };
-    utterance.onerror = () => {
-      ttsSpeakingRef.current = false;
-      setTimeout(ttsProcessQueue, 400);
-    };
+    utterance.onend = () => { ttsSpeakingRef.current = false; setTimeout(ttsProcessQueue, 400); };
+    utterance.onerror = () => { ttsSpeakingRef.current = false; setTimeout(ttsProcessQueue, 400); };
 
     window.speechSynthesis.speak(utterance);
   }, []);
 
   const announce = useCallback((entry: ChiamataEntry) => {
-    if (!('speechSynthesis' in window) || !audioEnabled) return;
-    const numeroSolo = entry.ticket.replace(/[A-Za-z]/g, '');
-    const numeroSpaced = numeroSolo.split('').join(' ');
-    const text = `Numero ${numeroSpaced}, ${entry.servizio}, postazione ${entry.postazione}`;
-    // Max 3 annunci in coda — se ci sono già 3 in attesa ignora (evita accumuli infiniti)
-    if (ttsQueueRef.current.length < 3) {
-      ttsQueueRef.current.push(text);
-    }
-    ttsProcessQueue();
-  }, [audioEnabled, ttsProcessQueue]);
+    // Plim sempre attivo
+    playPlim();
 
+    // Voce opzionale (ritardata di 500ms per far suonare il plim prima)
+    if (voiceEnabled && 'speechSynthesis' in window) {
+      const numeroSolo = entry.ticket.replace(/[A-Za-z]/g, '');
+      const numeroSpaced = numeroSolo.split('').join(' ');
+      const text = `Numero ${numeroSpaced}, ${entry.servizio}, postazione ${entry.postazione}`;
+      if (ttsQueueRef.current.length < 3) {
+        // Piccolo delay per far finire il plim
+        setTimeout(() => {
+          ttsQueueRef.current.push(text);
+          ttsProcessQueue();
+        }, 500);
+      }
+    }
+  }, [voiceEnabled, playPlim, ttsProcessQueue]);
+
+  // ── WebSocket ─────────────────────────────────────────────────────────────
   const connect = useCallback(async () => {
     if (!mountedRef.current) return;
     let token: string;
@@ -88,8 +112,7 @@ export default function MonitorDisplay() {
     }
 
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const url = `${protocol}://${window.location.host}/ws?token=${encodeURIComponent(token)}`;
-    const ws = new WebSocket(url);
+    const ws = new WebSocket(`${protocol}://${window.location.host}/ws?token=${encodeURIComponent(token)}`);
     wsRef.current = ws;
 
     ws.onopen = () => { retryCountRef.current = 0; setConnected(true); };
@@ -101,19 +124,17 @@ export default function MonitorDisplay() {
           const entry: ChiamataEntry = {
             ticket: msg['ticket'] as string,
             servizio: msg['servizio'] as string,
-            postazione: msg['postazione'] as number,
+            postazione: String(msg['postazione']),
             timestamp: msg['timestamp'] as string,
           };
-          setHistory((prev) => [entry, ...prev].slice(0, 20)); // Mantieni fino a 20 elementi
-          
-          // Announce both new calls and recalled numbers
+          setHistory((prev) => [entry, ...prev].slice(0, 20));
           announce(entry);
         }
         if (msg.type === 'INITIAL_STATE') {
           const ultimi = (msg['ultimiChiamati'] as ChiamataEntry[] | undefined) ?? [];
-          setHistory(ultimi.slice(0, 20));
+          setHistory(ultimi.map(u => ({ ...u, postazione: String(u.postazione) })).slice(0, 20));
         }
-      } catch { /* ignora messaggi malformati */ }
+      } catch { /* ignora */ }
     };
 
     ws.onclose = () => {
@@ -133,213 +154,147 @@ export default function MonitorDisplay() {
       mountedRef.current = false;
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
       wsRef.current?.close();
+      audioCtxRef.current?.close();
     };
   }, [connect]);
 
   const current = history[0] ?? null;
-  const prev1   = history[1] ?? null;
-  const prev2   = history[2] ?? null;
-  const tableRows = history.slice(0, 15);
+  const prev1 = history[1] ?? null;
+  const prev2 = history[2] ?? null;
 
+  // Data e ora corrette con toLocaleString (usa il locale del browser)
   const timeStr = time.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   const dateStr = time.toLocaleDateString('it-IT', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
 
   return (
-    <div style={styles.root}>
+    <div style={S.root}>
 
       {/* ── HEADER ── */}
-      <div style={styles.header}>
-        <div style={styles.headerLogo}>
-          <span style={{ fontSize: 28, marginRight: 10 }}>🎫</span>
-          <span style={styles.headerTitle}>SALTACODE</span>
-          <span style={styles.headerSub}>Sistema Gestione Code</span>
+      <div style={S.header}>
+        <div style={S.headerLogo}>
+          <span style={{ fontSize: 24, marginRight: 8 }}>🎫</span>
+          <span style={S.headerTitle}>SALTACODE</span>
+          <span style={S.headerSub}>Sistema Gestione Code</span>
         </div>
-        <div style={styles.headerClock}>
-          <div style={styles.clockTime}>{timeStr}</div>
-          <div style={styles.clockDate}>{dateStr}</div>
+        <div style={S.headerClock}>
+          <div style={S.clockTime}>{timeStr}</div>
+          <div style={S.clockDate}>{dateStr}</div>
         </div>
       </div>
 
       {/* ── BODY ── */}
-      <div style={styles.body}>
+      <div style={S.body}>
 
-        {/* ── SINISTRA: numeri chiamati ── */}
-        <div style={styles.leftPanel}>
+        {/* ── SINISTRA ── */}
+        <div style={S.leftPanel}>
 
-          {/* Numero corrente */}
-          <div style={styles.currentBox}>
-            <div style={styles.currentLabel}>NUMERO IN SERVIZIO</div>
+          {/* Box numero corrente */}
+          <div style={S.currentBox}>
+            <div style={S.currentLabel}>NUMERO IN SERVIZIO</div>
             {current ? (
               <>
-                <div style={styles.currentService}>{current.servizio}</div>
-                <div style={styles.currentTicket}>{current.ticket}</div>
-                <div style={styles.currentPost}>Postazione {current.postazione}</div>
+                {/* Servizio: piccolo */}
+                <div style={S.currentService}>{current.servizio}</div>
+                {/* Ticket: enorme */}
+                <div style={S.currentTicket}>{current.ticket}</div>
+                {/* Postazione: grande */}
+                <div style={S.currentPost}>Postazione {current.postazione}</div>
               </>
             ) : (
-              <div style={styles.currentEmpty}>In attesa…</div>
+              <div style={S.currentEmpty}>In attesa…</div>
             )}
           </div>
 
-          {/* Divider */}
-          <div style={styles.prevDivider}>PRECEDENTI</div>
+          <div style={S.prevDivider}>PRECEDENTI</div>
 
-          {/* Ultimi 2 numeri */}
-          <div style={styles.prevRow}>
+          {/* Ultimi 2 */}
+          <div style={S.prevRow}>
             {[prev1, prev2].map((entry, i) => (
-              <div key={i} style={{
-                ...styles.prevBox,
-                opacity: entry ? 1 : 0.2,
-                borderColor: i === 0 ? '#2ecc71' : '#3498db',
-              }}>
+              <div key={i} style={{ ...S.prevBox, opacity: entry ? 1 : 0.2, borderColor: i === 0 ? '#2ecc71' : '#3498db' }}>
                 {entry ? (
                   <>
-                    <div style={{ ...styles.prevService, color: i === 0 ? '#2ecc71' : '#3498db' }}>{entry.servizio}</div>
-                    <div style={{ ...styles.prevTicket, color: i === 0 ? '#2ecc71' : '#3498db' }}>{entry.ticket}</div>
-                    <div style={styles.prevPost}>Post. {entry.postazione}</div>
+                    <div style={{ ...S.prevService, color: i === 0 ? '#2ecc71' : '#3498db' }}>{entry.servizio}</div>
+                    <div style={{ ...S.prevTicket, color: i === 0 ? '#2ecc71' : '#3498db' }}>{entry.ticket}</div>
+                    <div style={S.prevPost}>Post. {entry.postazione}</div>
                   </>
-                ) : (
-                  <div style={{ color: '#555', fontSize: 24 }}>—</div>
-                )}
+                ) : <div style={{ color: '#555', fontSize: 24 }}>—</div>}
               </div>
             ))}
           </div>
-
         </div>
 
-        {/* Separatore verticale */}
-        <div style={styles.divider} />
+        <div style={S.divider} />
 
         {/* ── DESTRA: cronologia ── */}
-        <div style={styles.rightPanel}>
-          <div style={styles.tableTitle}>CRONOLOGIA CHIAMATE</div>
-          <table style={styles.table}>
+        <div style={S.rightPanel}>
+          <div style={S.tableTitle}>CRONOLOGIA CHIAMATE</div>
+          <table style={S.table}>
             <thead>
               <tr>
-                <th style={{ ...styles.th, textAlign: 'left' }}>SERVIZIO</th>
-                <th style={styles.th}>N°</th>
-                <th style={styles.th}>POST.</th>
-                <th style={{ ...styles.th, textAlign: 'right' }}>ORA</th>
+                <th style={{ ...S.th, textAlign: 'left' }}>SERVIZIO</th>
+                <th style={S.th}>N°</th>
+                <th style={S.th}>POST.</th>
+                <th style={{ ...S.th, textAlign: 'right' }}>ORA</th>
               </tr>
             </thead>
             <tbody>
-              {tableRows.map((entry, i) => (
-                <tr key={i} style={{
-                  background: i === 0
-                    ? 'rgba(231,76,60,0.12)'
-                    : i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.04)',
-                }}>
-                  <td style={{ ...styles.td, textAlign: 'left', color: rowColor(i) }}>{entry.servizio}</td>
-                  <td style={{ ...styles.td, fontWeight: 800, color: rowColor(i) }}>{entry.ticket}</td>
-                  <td style={{ ...styles.td, color: '#aaa' }}>{entry.postazione}</td>
-                  <td style={{ ...styles.td, textAlign: 'right', color: '#888', fontSize: 16 }}>
+              {history.slice(0, 15).map((entry, i) => (
+                <tr key={i} style={{ background: i === 0 ? 'rgba(231,76,60,0.12)' : i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.04)' }}>
+                  <td style={{ ...S.td, textAlign: 'left', color: rowColor(i) }}>{entry.servizio}</td>
+                  <td style={{ ...S.td, fontWeight: 800, color: rowColor(i) }}>{entry.ticket}</td>
+                  <td style={{ ...S.td, color: '#aaa' }}>{entry.postazione}</td>
+                  <td style={{ ...S.td, textAlign: 'right', color: '#888', fontSize: 16 }}>
                     {new Date(entry.timestamp).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}
                   </td>
                 </tr>
               ))}
-              {/* righe vuote per riempire */}
-              {Array.from({ length: Math.max(0, 15 - tableRows.length) }, (_, i) => (
+              {Array.from({ length: Math.max(0, 15 - history.length) }, (_, i) => (
                 <tr key={`e${i}`} style={{ background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.04)' }}>
-                  <td style={styles.td}>&nbsp;</td>
-                  <td style={styles.td}>&nbsp;</td>
-                  <td style={styles.td}>&nbsp;</td>
-                  <td style={styles.td}>&nbsp;</td>
+                  <td style={S.td}>&nbsp;</td><td style={S.td}>&nbsp;</td>
+                  <td style={S.td}>&nbsp;</td><td style={S.td}>&nbsp;</td>
                 </tr>
               ))}
             </tbody>
           </table>
-
-        {/* Audio controls in top left */}
-        <div style={{ 
-          position: 'fixed', 
-          top: '16px', 
-          left: '20px',
-          display: 'flex',
-          gap: '10px',
-          alignItems: 'center'
-        }}>
-          <button
-            onClick={() => setAudioEnabled(!audioEnabled)}
-            style={{
-              background: audioEnabled ? '#27ae60' : '#e74c3c',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              padding: '8px 12px',
-              fontSize: '12px',
-              fontWeight: 'bold',
-              cursor: 'pointer'
-            }}
-            title={audioEnabled ? 'Disabilita audio' : 'Abilita audio'}
-          >
-            {audioEnabled ? '🔊 Audio ON' : '🔇 Audio OFF'}
-          </button>
-          
-          {ttsSupported && (
-            <button
-              onClick={() => {
-                const testEntry: ChiamataEntry = {
-                  ticket: 'A123',
-                  servizio: 'Test Service',
-                  postazione: 1,
-                  timestamp: new Date().toISOString()
-                };
-                announce(testEntry);
-              }}
-              style={{
-                background: '#3498db',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                padding: '8px 12px',
-                fontSize: '12px',
-                fontWeight: 'bold',
-                cursor: 'pointer'
-              }}
-              title="Test audio announcement"
-            >
-              🎵 Test Audio
-            </button>
-          )}
         </div>
-        </div>
-
-        {/* Indicatore audio se non supportato o disabilitato */}
-        {(!ttsSupported || !audioEnabled) && (
-          <div style={{ 
-            position: 'fixed', 
-            bottom: '30px', 
-            right: '10px',
-            background: !ttsSupported ? '#e74c3c' : '#f59e0b',
-            color: '#fff',
-            padding: '4px 8px',
-            fontSize: '11px',
-            fontWeight: 'bold',
-            borderRadius: '4px'
-          }}>
-            {!ttsSupported ? '⚠ TTS non supportato' : '🔇 Audio disabilitato'}
-          </div>
-        )}
       </div>
 
       {/* ── FOOTER ── */}
-      <div style={styles.footer}>
+      <div style={S.footer}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{
-            width: 10, height: 10, borderRadius: '50%',
+            width: 10, height: 10, borderRadius: '50%', display: 'inline-block',
             background: connected ? '#2ecc71' : '#e74c3c',
-            display: 'inline-block',
             boxShadow: connected ? '0 0 8px #2ecc71' : '0 0 8px #e74c3c',
           }} />
-          <span style={{ fontSize: 13, color: '#aaa' }}>
-            {connected ? 'Connesso' : 'Riconnessione in corso…'}
-          </span>
+          <span style={{ fontSize: 13, color: '#aaa' }}>{connected ? 'Connesso' : 'Riconnessione…'}</span>
         </div>
-        {!ttsSupported && (
-          <span style={{ fontSize: 12, color: '#f59e0b' }}>⚠ Annunci audio non disponibili</span>
-        )}
+
+        {/* Controllo voce — il plim è sempre attivo */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {!ttsSupported && (
+            <span style={{ fontSize: 12, color: '#f59e0b' }}>⚠ TTS non supportato</span>
+          )}
+          {ttsSupported && (
+            <button
+              onClick={() => setVoiceEnabled((v) => !v)}
+              style={{
+                background: voiceEnabled ? 'rgba(39,174,96,0.2)' : 'rgba(231,76,60,0.2)',
+                border: `1px solid ${voiceEnabled ? '#27ae60' : '#e74c3c'}`,
+                color: voiceEnabled ? '#2ecc71' : '#e74c3c',
+                borderRadius: 6, padding: '4px 12px',
+                fontSize: 12, fontWeight: 700, cursor: 'pointer',
+              }}
+              title="Il plim è sempre attivo. Questo pulsante controlla solo l'annuncio vocale."
+            >
+              {voiceEnabled ? '🔊 Voce ON' : '🔇 Voce OFF'}
+            </button>
+          )}
+          <span style={{ fontSize: 11, color: '#444' }}>🔔 Plim sempre attivo</span>
+        </div>
+
         <span style={{ fontSize: 12, color: '#555' }}>Saltacode Queue Management</span>
       </div>
-
     </div>
   );
 }
@@ -351,24 +306,17 @@ function rowColor(i: number): string {
   return '#ccc';
 }
 
-// ── Stili inline ─────────────────────────────────────────────────────────────
-const styles: Record<string, React.CSSProperties> = {
+const S: Record<string, React.CSSProperties> = {
   root: {
-    display: 'flex', flexDirection: 'column',
-    height: '100vh', width: '100vw',
-    background: '#0f0f1a',
-    fontFamily: "'Tahoma', 'Helvetica Neue', sans-serif",
-    overflow: 'hidden', color: 'white',
-    userSelect: 'none',
+    display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw',
+    background: '#0f0f1a', fontFamily: "'Tahoma','Helvetica Neue',sans-serif",
+    overflow: 'hidden', color: 'white', userSelect: 'none',
   },
-
-  // Header
   header: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
     padding: '10px 30px',
-    background: 'linear-gradient(90deg, #1a1a2e 0%, #16213e 100%)',
-    borderBottom: '2px solid #e74c3c',
-    flexShrink: 0,
+    background: 'linear-gradient(90deg,#1a1a2e,#16213e)',
+    borderBottom: '2px solid #e74c3c', flexShrink: 0,
   },
   headerLogo: { display: 'flex', alignItems: 'center', gap: 4 },
   headerTitle: { fontSize: 26, fontWeight: 900, letterSpacing: 4, color: '#e74c3c' },
@@ -376,13 +324,7 @@ const styles: Record<string, React.CSSProperties> = {
   headerClock: { textAlign: 'right' },
   clockTime: { fontSize: 32, fontWeight: 900, fontFamily: 'monospace', letterSpacing: 2, color: 'white' },
   clockDate: { fontSize: 13, color: '#888', textTransform: 'capitalize' },
-
-  // Body
-  body: {
-    display: 'flex', flex: 1, overflow: 'hidden',
-  },
-
-  // Pannello sinistro
+  body: { display: 'flex', flex: 1, overflow: 'hidden' },
   leftPanel: {
     width: '62%', display: 'flex', flexDirection: 'column',
     padding: '20px 30px', gap: 12,
@@ -390,90 +332,56 @@ const styles: Record<string, React.CSSProperties> = {
   currentBox: {
     flex: 1, display: 'flex', flexDirection: 'column',
     alignItems: 'center', justifyContent: 'center',
-    background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)',
-    border: '2px solid rgba(231,76,60,0.4)',
-    borderRadius: 12,
-    padding: '20px 30px',
-    textAlign: 'center',
+    background: 'linear-gradient(135deg,#1a1a2e,#16213e)',
+    border: '2px solid rgba(231,76,60,0.4)', borderRadius: 12,
+    padding: '20px 30px', textAlign: 'center',
   },
   currentLabel: {
-    fontSize: 16, fontWeight: 700, letterSpacing: 4,
-    color: '#e74c3c', marginBottom: 12,
-    borderBottom: '1px solid rgba(231,76,60,0.3)',
-    paddingBottom: 10, width: '100%',
+    fontSize: 14, fontWeight: 700, letterSpacing: 4, color: '#e74c3c',
+    marginBottom: 8, borderBottom: '1px solid rgba(231,76,60,0.3)',
+    paddingBottom: 8, width: '100%',
   },
+  // Servizio: più piccolo
   currentService: {
-    fontSize: 52, fontWeight: 700, color: '#fff',
-    marginBottom: 4, lineHeight: 1.1,
-    textTransform: 'uppercase',
+    fontSize: 28, fontWeight: 600, color: '#94a3b8',
+    marginBottom: 4, lineHeight: 1.2, textTransform: 'uppercase',
   },
+  // Ticket: enorme rosso
   currentTicket: {
     fontSize: 140, fontWeight: 900, color: '#e74c3c',
     lineHeight: 1, letterSpacing: 4,
     textShadow: '0 0 40px rgba(231,76,60,0.5)',
   },
+  // Postazione: grande bianca
   currentPost: {
-    fontSize: 28, color: '#aaa', marginTop: 8, fontWeight: 600,
+    fontSize: 42, color: 'white', marginTop: 8, fontWeight: 800, letterSpacing: 2,
   },
-  currentEmpty: {
-    fontSize: 40, color: '#333', fontStyle: 'italic',
-  },
-
-  prevDivider: {
-    fontSize: 12, fontWeight: 700, letterSpacing: 4,
-    color: '#444', textAlign: 'center',
-  },
-
-  prevRow: {
-    display: 'flex', gap: 16, flexShrink: 0,
-  },
+  currentEmpty: { fontSize: 40, color: '#333', fontStyle: 'italic' },
+  prevDivider: { fontSize: 11, fontWeight: 700, letterSpacing: 4, color: '#333', textAlign: 'center' },
+  prevRow: { display: 'flex', gap: 16, flexShrink: 0 },
   prevBox: {
-    flex: 1, padding: '14px 20px', borderRadius: 10,
-    border: '2px solid',
-    background: 'rgba(255,255,255,0.03)',
-    textAlign: 'center',
+    flex: 1, padding: '12px 16px', borderRadius: 10, border: '2px solid',
+    background: 'rgba(255,255,255,0.03)', textAlign: 'center',
     display: 'flex', flexDirection: 'column', gap: 2,
   },
-  prevService: { fontSize: 18, fontWeight: 600 },
-  prevTicket: { fontSize: 52, fontWeight: 900, letterSpacing: 2 },
-  prevPost: { fontSize: 14, color: '#666' },
-
-  // Divisore
-  divider: {
-    width: 2, background: 'rgba(255,255,255,0.06)', flexShrink: 0,
-  },
-
-  // Pannello destro
-  rightPanel: {
-    flex: 1, display: 'flex', flexDirection: 'column',
-    padding: '20px 24px',
-    overflow: 'hidden',
-  },
-  tableTitle: {
-    fontSize: 13, fontWeight: 700, letterSpacing: 4,
-    color: '#555', marginBottom: 10, textAlign: 'center',
-  },
-  table: {
-    width: '100%', borderCollapse: 'collapse', flex: 1,
-  },
+  prevService: { fontSize: 14, fontWeight: 600, color: '#888' },
+  prevTicket: { fontSize: 48, fontWeight: 900, letterSpacing: 2 },
+  prevPost: { fontSize: 16, color: '#888', fontWeight: 700 },
+  divider: { width: 2, background: 'rgba(255,255,255,0.06)', flexShrink: 0 },
+  rightPanel: { flex: 1, display: 'flex', flexDirection: 'column', padding: '20px 24px', overflow: 'hidden' },
+  tableTitle: { fontSize: 12, fontWeight: 700, letterSpacing: 4, color: '#444', marginBottom: 10, textAlign: 'center' },
+  table: { width: '100%', borderCollapse: 'collapse' },
   th: {
-    fontSize: 14, fontWeight: 700, color: '#555',
-    padding: '6px 10px', textAlign: 'center',
-    borderBottom: '1px solid rgba(255,255,255,0.08)',
-    letterSpacing: 1,
+    fontSize: 12, fontWeight: 700, color: '#555', padding: '6px 10px', textAlign: 'center',
+    borderBottom: '1px solid rgba(255,255,255,0.08)', letterSpacing: 1,
   },
   td: {
-    fontSize: 22, fontWeight: 600, color: '#ccc',
-    padding: '5px 10px', textAlign: 'center',
+    fontSize: 20, fontWeight: 600, color: '#ccc', padding: '5px 10px', textAlign: 'center',
     borderBottom: '1px solid rgba(255,255,255,0.05)',
   },
-
-  // Footer
   footer: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    padding: '8px 30px',
-    background: '#0a0a14',
-    borderTop: '1px solid rgba(255,255,255,0.06)',
-    flexShrink: 0,
+    padding: '8px 30px', background: '#0a0a14',
+    borderTop: '1px solid rgba(255,255,255,0.06)', flexShrink: 0,
   },
 };

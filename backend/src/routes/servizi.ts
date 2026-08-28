@@ -133,4 +133,37 @@ router.patch('/:id', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res:
   }
 });
 
+/**
+ * DELETE /api/servizi/:id
+ * Roles: SUPERADMIN, ADMIN
+ * ADMIN può eliminare solo servizi della propria area.
+ * Elimina anche i ticket ATTESA associati (gli altri stati vengono preservati per storico).
+ */
+router.delete('/:id', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = parseInt(req.params['id'] ?? '', 10);
+    if (isNaN(id)) { res.status(400).json({ error: 'ID non valido.' }); return; }
+
+    const servizio = await prisma.servizio.findUnique({ where: { id } });
+    if (!servizio) { res.status(404).json({ error: 'Servizio non trovato.' }); return; }
+
+    const user = req.user!;
+    if (user.ruolo === 'ADMIN' && !user.aree.includes(servizio.areaId)) {
+      res.status(403).json({ error: 'Non autorizzato a eliminare servizi di questa area.' });
+      return;
+    }
+
+    // Elimina prima i ticket in ATTESA, poi il servizio
+    await prisma.$transaction([
+      prisma.ticket.deleteMany({ where: { servizioId: id, stato: 'ATTESA' } }),
+      prisma.servizio.delete({ where: { id } }),
+    ]);
+
+    res.status(204).send();
+  } catch (err: any) {
+    if (err?.code === 'P2025') { res.status(404).json({ error: 'Servizio non trovato.' }); return; }
+    next(err);
+  }
+});
+
 export default router;

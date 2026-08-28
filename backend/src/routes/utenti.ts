@@ -471,6 +471,102 @@ router.post('/change-password', async (req: Request, res: Response, next: NextFu
 });
 
 /**
+ * PATCH /api/utenti/me
+ * Permette all'utente autenticato di aggiornare il proprio username e/o password.
+ * Body: { username?: string, currentPassword?: string, newPassword?: string }
+ */
+router.patch('/me', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = req.user!;
+    const { username: newUsername, currentPassword, newPassword, cognome, nome } = req.body as {
+      username?: string;
+      currentPassword?: string;
+      newPassword?: string;
+      cognome?: string;
+      nome?: string;
+    };
+
+    const utente = await prisma.utente.findUnique({ where: { id: user.sub } });
+    if (!utente) { res.status(404).json({ error: 'Utente non trovato.' }); return; }
+
+    const data: Record<string, unknown> = {};
+
+    // ── Cambio nome/cognome ─────────────────────────────────────────────────
+    if (cognome !== undefined) {
+      const trimmed = cognome.trim();
+      if (trimmed.length < 2 || trimmed.length > 50) {
+        res.status(400).json({ error: 'Cognome non valido: 2-50 caratteri.' });
+        return;
+      }
+      data['cognome'] = trimmed;
+    }
+    if (nome !== undefined) {
+      const trimmed = nome.trim();
+      if (trimmed.length < 2 || trimmed.length > 50) {
+        res.status(400).json({ error: 'Nome non valido: 2-50 caratteri.' });
+        return;
+      }
+      data['nome'] = trimmed;
+    }
+
+    // ── Cambio username ─────────────────────────────────────────────────────
+    if (newUsername !== undefined) {
+      const trimmed = newUsername.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
+      if (trimmed.length < 3 || trimmed.length > 30) {
+        res.status(400).json({ error: 'Username non valido: 3-30 caratteri alfanumerici o underscore.' });
+        return;
+      }
+      // Verifica unicità
+      const existing = await prisma.utente.findUnique({ where: { username: trimmed } });
+      if (existing && existing.id !== user.sub) {
+        res.status(409).json({ error: 'Username già in uso.' });
+        return;
+      }
+      data['username'] = trimmed;
+    }
+
+    // ── Cambio password ─────────────────────────────────────────────────────
+    if (newPassword !== undefined) {
+      if (!currentPassword) {
+        res.status(400).json({ error: 'Inserire la password attuale per cambiare la password.' });
+        return;
+      }
+      const match = await authService.comparePassword(currentPassword, utente.passwordHash);
+      if (!match) {
+        res.status(401).json({ error: 'Password attuale non corretta.' });
+        return;
+      }
+      if (!authService.validatePassword(newPassword)) {
+        res.status(400).json({ error: 'La nuova password non rispetta la policy: minimo 10 caratteri, 1 maiuscola, 1 carattere speciale.' });
+        return;
+      }
+      data['passwordHash'] = await authService.hashPassword(newPassword);
+      data['mustChangePwd'] = false;
+    }
+
+    if (Object.keys(data).length === 0) {
+      res.status(400).json({ error: 'Nessun campo da aggiornare.' });
+      return;
+    }
+
+    const updated = await prisma.utente.update({ where: { id: user.sub }, data });
+
+    res.json({
+      message: 'Profilo aggiornato con successo.',
+      username: updated.username,
+      nome: updated.nome,
+      cognome: updated.cognome,
+    });
+  } catch (err: any) {
+    if (err?.code === 'P2002') {
+      res.status(409).json({ error: 'Username già in uso.' });
+      return;
+    }
+    next(err);
+  }
+});
+
+/**
  * PATCH /api/utenti/me/stato
  * Body: { stato: 'ATTIVO' | 'PAUSA' }
  * Permette agli operatori di cambiare il proprio stato operativo

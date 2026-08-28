@@ -8,15 +8,11 @@ import { broadcastAll } from './wsService.js';
  */
 export async function callNext(
   servizioId: number,
-  postazione: number,
+  postazione: string,
   utenteId: number
-): Promise<{ chiamataId: number; ticketNumero: string; postazione: number } | null> {
+): Promise<{ chiamataId: number; ticketNumero: string; postazione: string } | null> {
 
-  // Usa SELECT FOR UPDATE SKIP LOCKED per evitare race condition
-  // quando più postazioni chiamano lo stesso servizio simultaneamente.
-  // Solo una transaction per volta acquisisce il lock sul ticket.
   const result = await prisma.$transaction(async (tx) => {
-    // Trova e blocca il prossimo ticket disponibile
     const tickets = await tx.$queryRaw<{ id: number; numero: string; servizioId: number }[]>`
       SELECT t.id, t.numero, t."servizioId"
       FROM ticket t
@@ -26,11 +22,10 @@ export async function callNext(
       FOR UPDATE SKIP LOCKED
     `;
 
-    if (tickets.length === 0) return null; // coda vuota o già presa da altra postazione
+    if (tickets.length === 0) return null;
 
     const ticket = tickets[0]!;
 
-    // Aggiorna stato e crea chiamata nella stessa transaction
     await tx.ticket.update({
       where: { id: ticket.id },
       data: { stato: 'CHIAMATO' },
@@ -75,7 +70,6 @@ export async function callNext(
 
   return { chiamataId: chiamata.id, ticketNumero: ticket.numero, postazione };
 }
-
 /**
  * Annulla l'ultima chiamata effettuata dall'operatore.
  * Rimette il ticket in testa alla coda (stato ATTESA) e cancella la chiamata dal DB.

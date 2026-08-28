@@ -132,7 +132,7 @@ model Chiamata {
   servizio   Servizio @relation(fields: [servizioId], references: [id])
   ticketId   Int?
   ticket     Ticket?  @relation(fields: [ticketId], references: [id])
-  postazione Int
+  postazione String   @db.VarChar(3)
   timestamp  DateTime @default(now())
 
   @@map("chiamate")
