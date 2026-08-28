@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../hooks/useAuth';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import apiClient from '../../api/client';
+import RoleSwitcher from '../../components/RoleSwitcher';
 
 interface Servizio {
   id: number;
@@ -294,6 +295,7 @@ export default function OperatoreDashboard() {
           >
             {stateLoading ? '⏳' : isPausa ? '▶ Riprendi' : '⏸ Pausa'}
           </button>
+          <RoleSwitcher />
           <button onClick={logout} style={{
             background: 'rgba(239,68,68,0.15)', color: '#fca5a5',
             border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8,

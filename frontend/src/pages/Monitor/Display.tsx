@@ -34,28 +34,46 @@ export default function MonitorDisplay() {
     return () => clearInterval(t);
   }, []);
 
-  const announce = useCallback((entry: ChiamataEntry) => {
-    if (!('speechSynthesis' in window) || !audioEnabled) return;
-    
-    // Cancel any previous announcements
-    window.speechSynthesis.cancel();
-    
-    // Extract the number part from the ticket (remove letters)
-    const numeroSolo = entry.ticket.replace(/[A-Z]/g, '');
-    const numeroSpaced = numeroSolo.split('').join(' ');
-    
-    const text = `Numero ${numeroSpaced}, servizio ${entry.servizio}, postazione ${entry.postazione}`;
+  // ── Coda TTS serializzata ─────────────────────────────────────────────────
+  const ttsQueueRef = useRef<string[]>([]);
+  const ttsSpeakingRef = useRef(false);
+
+  const ttsProcessQueue = useCallback(() => {
+    if (ttsSpeakingRef.current || ttsQueueRef.current.length === 0) return;
+    if (!('speechSynthesis' in window)) return;
+
+    const text = ttsQueueRef.current.shift()!;
+    ttsSpeakingRef.current = true;
+
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = 'it-IT';
-    utterance.rate = 0.8;
-    utterance.volume = 0.9;
+    utterance.rate = 0.82;
+    utterance.volume = 1.0;
     utterance.pitch = 1.0;
-    
-    // Add some delay to ensure the announcement is clear
-    setTimeout(() => {
-      window.speechSynthesis.speak(utterance);
-    }, 100);
-  }, [audioEnabled]);
+
+    utterance.onend = () => {
+      ttsSpeakingRef.current = false;
+      setTimeout(ttsProcessQueue, 400);
+    };
+    utterance.onerror = () => {
+      ttsSpeakingRef.current = false;
+      setTimeout(ttsProcessQueue, 400);
+    };
+
+    window.speechSynthesis.speak(utterance);
+  }, []);
+
+  const announce = useCallback((entry: ChiamataEntry) => {
+    if (!('speechSynthesis' in window) || !audioEnabled) return;
+    const numeroSolo = entry.ticket.replace(/[A-Za-z]/g, '');
+    const numeroSpaced = numeroSolo.split('').join(' ');
+    const text = `Numero ${numeroSpaced}, ${entry.servizio}, postazione ${entry.postazione}`;
+    // Max 3 annunci in coda — se ci sono già 3 in attesa ignora (evita accumuli infiniti)
+    if (ttsQueueRef.current.length < 3) {
+      ttsQueueRef.current.push(text);
+    }
+    ttsProcessQueue();
+  }, [audioEnabled, ttsProcessQueue]);
 
   const connect = useCallback(async () => {
     if (!mountedRef.current) return;

@@ -11,43 +11,67 @@ export async function callNext(
   postazione: number,
   utenteId: number
 ): Promise<{ chiamataId: number; ticketNumero: string; postazione: number } | null> {
-  const ticket = await prisma.ticket.findFirst({
-    where: { servizioId, stato: 'ATTESA' },
-    orderBy: { emessoPer: 'asc' },
-    include: { servizio: { include: { area: true } } },
-  });
 
-  if (!ticket) return null; // coda vuota
+  // Usa SELECT FOR UPDATE SKIP LOCKED per evitare race condition
+  // quando più postazioni chiamano lo stesso servizio simultaneamente.
+  // Solo una transaction per volta acquisisce il lock sul ticket.
+  const result = await prisma.$transaction(async (tx) => {
+    // Trova e blocca il prossimo ticket disponibile
+    const tickets = await tx.$queryRaw<{ id: number; numero: string; servizioId: number }[]>`
+      SELECT t.id, t.numero, t."servizioId"
+      FROM ticket t
+      WHERE t."servizioId" = ${servizioId} AND t.stato = 'ATTESA'
+      ORDER BY t."emessoPer" ASC
+      LIMIT 1
+      FOR UPDATE SKIP LOCKED
+    `;
 
-  const [chiamata] = await prisma.$transaction([
-    prisma.chiamata.create({
-      data: { utenteId, servizioId, ticketId: ticket.id, postazione },
-    }),
-    prisma.ticket.update({
+    if (tickets.length === 0) return null; // coda vuota o già presa da altra postazione
+
+    const ticket = tickets[0]!;
+
+    // Aggiorna stato e crea chiamata nella stessa transaction
+    await tx.ticket.update({
       where: { id: ticket.id },
       data: { stato: 'CHIAMATO' },
-    }),
-  ]);
+    });
 
-  // Broadcast WebSocket per il numero chiamato
-  broadcastAll(ticket.servizio.areaId, {
-    type: 'NUMERO_CHIAMATO',
-    ticket: ticket.numero,
-    postazione,
-    servizio: ticket.servizio.nome,
-    timestamp: new Date().toISOString(),
+    const chiamata = await tx.chiamata.create({
+      data: { utenteId, servizioId, ticketId: ticket.id, postazione },
+    });
+
+    return { chiamata, ticket };
   });
 
-  // Broadcast WebSocket per l'aggiornamento della coda
-  const codaRimasta = await prisma.ticket.count({
-    where: { servizioId, stato: 'ATTESA' },
+  if (!result) return null;
+
+  const { chiamata, ticket } = result;
+
+  // Recupera info area per il broadcast (fuori dalla transaction)
+  const servizio = await prisma.servizio.findUnique({
+    where: { id: servizioId },
+    include: { area: true },
   });
 
-  broadcastAll(ticket.servizio.areaId, {
-    type: 'CODA_AGGIORNATA',
-    servizioId,
-    count: codaRimasta,
-  });
+  if (servizio) {
+    broadcastAll(servizio.areaId, {
+      type: 'NUMERO_CHIAMATO',
+      ticket: ticket.numero,
+      postazione,
+      servizio: servizio.nome,
+      timestamp: new Date().toISOString(),
+    });
+
+    const codaRimasta = await prisma.ticket.count({
+      where: { servizioId, stato: 'ATTESA' },
+    });
+
+    broadcastAll(servizio.areaId, {
+      type: 'CODA_AGGIORNATA',
+      servizioId,
+      count: codaRimasta,
+    });
+  }
 
   return { chiamataId: chiamata.id, ticketNumero: ticket.numero, postazione };
 }

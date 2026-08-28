@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../../hooks/useAuth';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import apiClient from '../../api/client';
+import RoleSwitcher from '../../components/RoleSwitcher';
 
 interface Servizio {
   id: number;
@@ -31,8 +32,10 @@ export default function AccoglienzaDashboard() {
   const [loading, setLoading] = useState(true);
   const [code, setCode] = useState<CodaState[]>([]);
   const [emitting, setEmitting] = useState<number | null>(null); // servizioId in corso
+  const [globalEmitting, setGlobalEmitting] = useState(false); // blocca tutti i pulsanti durante emissione
   const [error, setError] = useState('');
   const [lastTicket, setLastTicket] = useState<TicketEmesso | null>(null);
+  const dismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const printRef = useRef<HTMLIFrameElement | null>(null);
 
   // Carica servizi
@@ -78,12 +81,22 @@ export default function AccoglienzaDashboard() {
 
   // Emetti ticket e stampa PDF
   const handleEmittiTicket = async (servizioId: number) => {
+    if (globalEmitting) return; // blocca doppi click
     setError('');
     setEmitting(servizioId);
+    setGlobalEmitting(true);
+
+    // Cancella eventuale auto-dismiss precedente
+    if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current);
+    setLastTicket(null);
+
     try {
       const res = await apiClient.post<{ ticket: TicketEmesso; pdf: string }>('/ticket', { servizioId });
       const { ticket, pdf } = res.data;
       setLastTicket(ticket);
+
+      // Auto-dismiss del banner dopo 8 secondi
+      dismissTimerRef.current = setTimeout(() => setLastTicket(null), 8000);
 
       // Stampa automatica PDF senza aprire nuove pagine
       try {
@@ -137,6 +150,7 @@ export default function AccoglienzaDashboard() {
       setError(err?.response?.data?.error ?? 'Errore emissione ticket.');
     } finally {
       setEmitting(null);
+      setGlobalEmitting(false);
     }
   };
 
@@ -149,6 +163,7 @@ export default function AccoglienzaDashboard() {
         <h1 style={{ margin: 0, fontSize: 20 }}>🎫 Saltacode — Accoglienza</h1>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <span style={{ color: '#aaa', fontSize: 14 }}>{user?.username}</span>
+          <RoleSwitcher />
           <button onClick={logout} style={btnStyle('#ef4444')}>Esci</button>
         </div>
       </header>
@@ -168,7 +183,10 @@ export default function AccoglienzaDashboard() {
               <strong style={{ fontSize: 16 }}>✅ Ticket emesso:</strong>
               <span style={{ fontSize: 28, fontWeight: 900, marginLeft: 12, color: '#15803d' }}>{lastTicket.numero}</span>
             </div>
-            <button onClick={() => setLastTicket(null)} style={btnStyle('#6b7280', 'small')}>✕</button>
+            <button onClick={() => {
+              if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current);
+              setLastTicket(null);
+            }} style={btnStyle('#6b7280', 'small')}>✕</button>
           </div>
         )}
 
@@ -209,12 +227,12 @@ export default function AccoglienzaDashboard() {
 
                   <button
                     onClick={() => handleEmittiTicket(s.id)}
-                    disabled={isEmitting}
+                    disabled={isEmitting || globalEmitting}
                     style={{
-                      background: isEmitting ? '#9ca3af' : '#0f3460',
+                      background: isEmitting || globalEmitting ? '#9ca3af' : '#0f3460',
                       color: 'white', border: 'none', borderRadius: 6,
                       padding: '10px 0', fontSize: 15, fontWeight: 700,
-                      cursor: isEmitting ? 'not-allowed' : 'pointer',
+                      cursor: isEmitting || globalEmitting ? 'not-allowed' : 'pointer',
                       display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
                     }}
                   >
