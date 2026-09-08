@@ -3,6 +3,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import apiClient from '../../api/client';
 import AccountSettings from '../AccountSettings';
+import Logo from '../../components/Logo';
 
 interface Area {
   id: number;
@@ -37,7 +38,7 @@ interface CodaState { servizioId: number; nomeServizio: string; count: number; }
 
 type Tab = 'code' | 'servizi' | 'utenti';
 
-const RUOLI_ADMIN = ['ADMIN', 'ACCOGLIENZA', 'OPERATORE'];
+const RUOLI_ADMIN = ['ACCOGLIENZA', 'OPERATORE'];
 
 export default function AdminDashboard() {
   const { user, login, logout } = useAuth();
@@ -83,9 +84,8 @@ export default function AdminDashboard() {
     nome: '', lettera: '', areaId: user?.aree[0] ?? 0,
   });
 
-  // Modifica inline servizio esistente
   const [editingServizio, setEditingServizio] = useState<{
-    id: number; nome: string; lettera: string;
+    id: number; nome: string; lettera: string; areaId: number;
   } | null>(null);
 
   const loadServizi = useCallback(async () => {
@@ -133,6 +133,7 @@ export default function AdminDashboard() {
       await apiClient.patch(`/servizi/${editingServizio.id}`, {
         nome: editingServizio.nome,
         lettera: editingServizio.lettera.toUpperCase(),
+        areaId: editingServizio.areaId,
       });
       setEditingServizio(null);
       setServiziSuccess('Servizio aggiornato.');
@@ -170,6 +171,7 @@ export default function AdminDashboard() {
 
   const [editingRuoli, setEditingRuoli] = useState<{ utenteId: number; ruoli: string[] } | null>(null);
   const [editingAree, setEditingAree] = useState<{ utenteId: number; aree: number[] } | null>(null);
+  const [editingNome, setEditingNome] = useState<{ utenteId: number; cognome: string; nome: string } | null>(null);
   const [changingPassword, setChangingPassword] = useState<{ utenteId: number; username: string } | null>(null);
   const [newPasswordInput, setNewPasswordInput] = useState('');
 
@@ -256,6 +258,18 @@ export default function AdminDashboard() {
     } catch (err: any) { setUtentiError(err?.response?.data?.error ?? 'Errore aggiornamento aree.'); }
   };
 
+  const handleSalvaNome = async () => {
+    if (!editingNome) return;
+    setUtentiError('');
+    try {
+      await apiClient.patch(`/utenti/${editingNome.utenteId}`, {
+        cognome: editingNome.cognome,
+        nome: editingNome.nome,
+      });
+      setEditingNome(null); setUtentiSuccess('Nome aggiornato.'); loadUtenti();
+    } catch (err: any) { setUtentiError(err?.response?.data?.error ?? 'Errore aggiornamento nome.'); }
+  };
+
   const handleChangePassword = async () => {
     if (!changingPassword || !newPasswordInput.trim()) return;
     try {
@@ -311,9 +325,12 @@ export default function AdminDashboard() {
 
       {/* Header */}
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 24px', background: '#16213e', color: 'white' }}>
-        <div>
-          <h1 style={{ margin: 0, fontSize: 20 }}>📋 Saltacode — Admin</h1>
-          {areaNomi && <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>Aree: {areaNomi}</div>}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <Logo height={32} />
+          <div>
+            <h1 style={{ margin: 0, fontSize: 20 }}>📋 Saltacode — Admin</h1>
+            {areaNomi && <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>Aree: {areaNomi}</div>}
+          </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {ruoliDisponibili.length > 1 && (
@@ -420,10 +437,10 @@ export default function AdminDashboard() {
                       <tr key={s.id} style={{ borderBottom: '1px solid #f0f0f0' }}>
                         <td style={td}><strong>{s.area.prefisso}{s.lettera}</strong></td>
 
-                        {/* Nome + lettera editabili inline */}
+                        {/* Nome + lettera + area editabili inline */}
                         <td style={td}>
                           {editingServizio?.id === s.id ? (
-                            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
                               <input
                                 style={{ ...inp, minWidth: 140, padding: '4px 8px', fontSize: 13 }}
                                 value={editingServizio.nome}
@@ -439,7 +456,17 @@ export default function AdminDashboard() {
                           ) : s.nome}
                         </td>
 
-                        <td style={td}>{s.area.nome}</td>
+                        <td style={td}>
+                          {editingServizio?.id === s.id ? (
+                            <select
+                              style={{ ...inp, padding: '4px 8px', fontSize: 13 }}
+                              value={editingServizio.areaId}
+                              onChange={(e) => setEditingServizio((p) => p ? { ...p, areaId: Number(e.target.value) } : p)}
+                            >
+                              {areeAdmin.map((a) => <option key={a.id} value={a.id}>{a.prefisso} — {a.nome}</option>)}
+                            </select>
+                          ) : s.area.nome}
+                        </td>
                         <td style={td}>{s._count.ticket}</td>
                         <td style={td}>
                           <span style={badge(s.attivo ? 'green' : 'red')}>{s.attivo ? 'Attivo' : 'Disabilitato'}</span>
@@ -452,7 +479,7 @@ export default function AdminDashboard() {
                                 <button onClick={() => setEditingServizio(null)} style={btn('#6b7280', 'sm')}>Annulla</button>
                               </>
                             ) : (
-                              <button onClick={() => setEditingServizio({ id: s.id, nome: s.nome, lettera: s.lettera })}
+                              <button onClick={() => setEditingServizio({ id: s.id, nome: s.nome, lettera: s.lettera, areaId: s.areaId })}
                                 style={btn('#3b82f6', 'sm')}>Modifica</button>
                             )}
                             <button onClick={() => handleToggleServizio(s)}
@@ -561,7 +588,35 @@ export default function AdminDashboard() {
                         return (
                           <tr key={u.id} style={{ borderBottom: '1px solid #f0f0f0' }}>
                             <td style={td}><code>{u.username}</code></td>
-                            <td style={td}>{u.cognome} {u.nome}</td>
+                            <td style={td}>
+                              {editingNome?.utenteId === u.id ? (
+                                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+                                  <input
+                                    style={{ ...inp, minWidth: 80, padding: '3px 6px', fontSize: 12 }}
+                                    value={editingNome.cognome}
+                                    onChange={(e) => setEditingNome((p) => p ? { ...p, cognome: e.target.value } : p)}
+                                    placeholder="Cognome"
+                                  />
+                                  <input
+                                    style={{ ...inp, minWidth: 80, padding: '3px 6px', fontSize: 12 }}
+                                    value={editingNome.nome}
+                                    onChange={(e) => setEditingNome((p) => p ? { ...p, nome: e.target.value } : p)}
+                                    placeholder="Nome"
+                                  />
+                                  <button onClick={handleSalvaNome} style={btn('#22c55e', 'sm')}>✓</button>
+                                  <button onClick={() => setEditingNome(null)} style={btn('#6b7280', 'sm')}>✕</button>
+                                </div>
+                              ) : (
+                                <span
+                                  onClick={() => !isAdmin && setEditingNome({ utenteId: u.id, cognome: u.cognome, nome: u.nome })}
+                                  title={isAdmin ? '' : 'Click per modificare'}
+                                  style={{ cursor: isAdmin ? 'default' : 'pointer' }}
+                                >
+                                  {u.cognome} {u.nome}
+                                  {!isAdmin && <span style={{ fontSize: 10, color: '#94a3b8', marginLeft: 4 }}>✏</span>}
+                                </span>
+                              )}
+                            </td>
 
                             {/* Ruoli */}
                             <td style={td}>

@@ -4,7 +4,7 @@ type WsMessage =
   | { type: 'TICKET_EMESSO'; servizioId: number; coda: number }
   | { type: 'NUMERO_CHIAMATO'; ticket: string; postazione: string; servizio: string; timestamp: string }
   | { type: 'NUMERO_RICHIAMATO'; ticket: string; postazione: string; servizio: string; timestamp: string }
-  | { type: 'STATO_OPERATORE'; utenteId: number; username: string; stato: 'ATTIVO' | 'PAUSA' | 'DISABILITATO'; postazione?: string | null }
+  | { type: 'STATO_OPERATORE'; utenteId: number; username: string; stato: 'ATTIVO' | 'PAUSA' | 'DISABILITATO'; postazione?: string | null; pausaInizio?: string | null }
   | { type: 'CODA_AGGIORNATA'; servizioId: number; count: number }
   | { type: 'INITIAL_STATE'; postazioni: PostazioneState[]; code: CodaState[]; ultimiChiamati: ChiamataState[] };
 

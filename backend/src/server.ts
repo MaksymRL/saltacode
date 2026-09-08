@@ -12,6 +12,11 @@ async function main() {
     await prisma.$connect();
     logger.info('Database connected');
 
+    // Reset ticket di giorni precedenti ancora in ATTESA
+    await resetTicketVecchi();
+    // Pianifica reset automatico ogni giorno a mezzanotte
+    scheduleDailyReset();
+
     const app = createApp();
     const server = http.createServer(app);
 
@@ -49,3 +54,37 @@ async function main() {
 }
 
 main();
+
+/**
+ * Mette in SCADUTO tutti i ticket in ATTESA emessi prima di oggi.
+ * Viene eseguito all'avvio e a mezzanotte.
+ */
+async function resetTicketVecchi(): Promise<void> {
+  const oggi = new Date();
+  oggi.setHours(0, 0, 0, 0);
+  const result = await prisma.ticket.updateMany({
+    where: { stato: 'ATTESA', emessoPer: { lt: oggi } },
+    data: { stato: 'SCADUTO' },
+  });
+  if (result.count > 0) {
+    logger.info(`Reset giornaliero: ${result.count} ticket scaduti.`);
+  }
+}
+
+/**
+ * Schedula il reset giornaliero a mezzanotte.
+ */
+function scheduleDailyReset(): void {
+  const ora = new Date();
+  const mezzanotte = new Date();
+  mezzanotte.setHours(24, 0, 30, 0); // 00:00:30 del giorno dopo
+  const msAllaReset = mezzanotte.getTime() - ora.getTime();
+
+  setTimeout(async () => {
+    await resetTicketVecchi();
+    // Ripianifica ogni 24h
+    setInterval(resetTicketVecchi, 24 * 60 * 60 * 1000);
+  }, msAllaReset);
+
+  logger.info(`Reset giornaliero pianificato tra ${Math.round(msAllaReset / 60000)} minuti.`);
+}

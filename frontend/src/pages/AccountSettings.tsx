@@ -13,7 +13,6 @@ export default function AccountSettings({ onClose }: { onClose: () => void }) {
   // ── Dati profilo ────────────────────────────────────────────────
   const [nome, setNome] = useState('');
   const [cognome, setCognome] = useState('');
-  const [newUsername, setNewUsername] = useState('');
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileMsg, setProfileMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
@@ -24,7 +23,6 @@ export default function AccountSettings({ onClose }: { onClose: () => void }) {
     const body: Record<string, string> = {};
     if (nome.trim()) body['nome'] = nome.trim();
     if (cognome.trim()) body['cognome'] = cognome.trim();
-    if (newUsername.trim()) body['username'] = newUsername.trim();
 
     if (Object.keys(body).length === 0) {
       setProfileMsg({ type: 'err', text: 'Inserisci almeno un campo da aggiornare.' });
@@ -34,8 +32,8 @@ export default function AccountSettings({ onClose }: { onClose: () => void }) {
     setProfileLoading(true);
     try {
       const res = await apiClient.patch<{ message: string; username: string; nome: string; cognome: string }>('/utenti/me', body);
-      setProfileMsg({ type: 'ok', text: 'Profilo aggiornato.' });
-      setNome(''); setCognome(''); setNewUsername('');
+      setProfileMsg({ type: 'ok', text: `Profilo aggiornato. Nuovo username: ${res.data.username}` });
+      setNome(''); setCognome('');
       // Aggiorna il contesto con il nuovo username
       if (user && token) {
         login({ ...user, username: res.data.username }, token);
@@ -95,21 +93,15 @@ export default function AccountSettings({ onClose }: { onClose: () => void }) {
                 <div style={{ flex: 1 }}>
                   <label style={S.label}>Cognome</label>
                   <input type="text" value={cognome} onChange={(e) => setCognome(e.target.value)}
-                    placeholder={`attuale`} style={S.input} />
+                    placeholder="Nuovo cognome" style={S.input} />
                 </div>
                 <div style={{ flex: 1 }}>
                   <label style={S.label}>Nome</label>
                   <input type="text" value={nome} onChange={(e) => setNome(e.target.value)}
-                    placeholder={`attuale`} style={S.input} />
+                    placeholder="Nuovo nome" style={S.input} />
                 </div>
               </div>
-              <div>
-                <label style={S.label}>Nuovo username</label>
-                <input type="text" value={newUsername} onChange={(e) => setNewUsername(e.target.value)}
-                  placeholder={`es. abrembilla`} minLength={3} maxLength={30} style={S.input}
-                  autoComplete="username" />
-                <span style={S.hint}>3-30 caratteri, solo lettere, numeri e underscore. Lascia vuoto per non cambiare.</span>
-              </div>
+              <span style={S.hint}>Lo username verrà aggiornato automaticamente (es. mrossi → anomi)</span>
               {profileMsg && <div style={msgStyle(profileMsg.type)}>{profileMsg.text}</div>}
               <button type="submit" disabled={profileLoading} style={S.btn(profileLoading)}>
                 {profileLoading ? 'Salvataggio…' : 'Aggiorna profilo'}

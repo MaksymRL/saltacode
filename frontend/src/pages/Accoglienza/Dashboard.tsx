@@ -4,6 +4,7 @@ import { useWebSocket } from '../../hooks/useWebSocket';
 import apiClient from '../../api/client';
 import RoleSwitcher from '../../components/RoleSwitcher';
 import AccountSettings from '../AccountSettings';
+import Logo from '../../components/Logo';
 
 interface OperatoreStato {
   id: number;
@@ -12,6 +13,7 @@ interface OperatoreStato {
   nome: string;
   stato: 'ATTIVO' | 'PAUSA' | 'DISABILITATO';
   postazione?: string | null;
+  pausaInizio?: string | null;
 }
 
 interface Servizio {
@@ -39,6 +41,15 @@ export default function AccoglienzaDashboard() {
   const [showSettings, setShowSettings] = useState(false);
   const dismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const handleAnnullaTicket = async () => {
+    if (!lastTicket) return;
+    try {
+      await apiClient.delete(`/ticket/${lastTicket.id}`);
+      if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current);
+      setLastTicket(null);
+    } catch { /* ignora — il ticket potrebbe essere già stato chiamato */ }
+  };
+
   const loadServizi = useCallback(async () => {
     setLoading(true);
     try {
@@ -52,6 +63,12 @@ export default function AccoglienzaDashboard() {
 
   // ── Operatori ─────────────────────────────────────────────────────────────
   const [operatori, setOperatori] = useState<OperatoreStato[]>([]);
+  // Ticker per i timer di pausa — un solo setInterval nel componente root
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
   const loadOperatori = useCallback(async () => {
     try {
       const res = await apiClient.get<OperatoreStato[]>('/utenti/operatori');
@@ -78,10 +95,22 @@ export default function AccoglienzaDashboard() {
       setCode((prev) => prev.map((c) => c.servizioId === servizioId ? { ...c, count: Math.max(0, c.count - 1) } : c));
     }
     if (msg.type === 'STATO_OPERATORE') {
-      const { utenteId, stato, postazione } = msg as unknown as {
-        utenteId: number; stato: 'ATTIVO' | 'PAUSA' | 'DISABILITATO'; postazione?: string | null;
+      const { utenteId, stato, postazione, pausaInizio } = msg as unknown as {
+        utenteId: number; stato: 'ATTIVO' | 'PAUSA' | 'DISABILITATO';
+        postazione?: string | null; pausaInizio?: string | null;
       };
-      setOperatori((prev) => prev.map((op) => op.id === utenteId ? { ...op, stato, postazione: postazione ?? op.postazione } : op));
+      setOperatori((prev) => {
+        const exists = prev.find((op) => op.id === utenteId);
+        if (exists) {
+          return prev
+            .map((op) => op.id === utenteId
+              ? { ...op, stato, postazione: postazione ?? op.postazione, pausaInizio: stato === 'PAUSA' ? (pausaInizio ?? op.pausaInizio) : null }
+              : op
+            )
+            .filter((op) => op && op.id != null);
+        }
+        return prev.filter((op) => op && op.id != null);
+      });
     }
   }, []);
   useWebSocket({ onMessage: handleWsMessage });
@@ -148,12 +177,20 @@ export default function AccoglienzaDashboard() {
       {/* Header */}
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 16px', background: '#0f3460', color: 'white', height: 48, flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Logo height={28} style={{ marginRight: 4 }} />
           <span style={{ fontSize: 18, fontWeight: 900, letterSpacing: 2 }}>🎫 ACCOGLIENZA</span>
           {lastTicket && (
-            <span style={{ background: '#22c55e', color: 'white', borderRadius: 4, padding: '2px 10px', fontWeight: 700, fontSize: 15, letterSpacing: 1 }}>
+            <span style={{ background: '#22c55e', color: 'white', borderRadius: 4, padding: '2px 10px', fontWeight: 700, fontSize: 15, letterSpacing: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
               ✓ {lastTicket.numero}
+              <button
+                onClick={handleAnnullaTicket}
+                title="Annulla ticket (non stampato)"
+                style={{ background: 'rgba(0,0,0,0.2)', border: 'none', color: 'white', cursor: 'pointer', fontSize: 11, padding: '1px 6px', borderRadius: 3, fontWeight: 700 }}
+              >
+                Annulla
+              </button>
               <button onClick={() => { if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current); setLastTicket(null); }}
-                style={{ background: 'none', border: 'none', color: 'white', marginLeft: 6, cursor: 'pointer', fontSize: 12, padding: 0 }}>✕</button>
+                style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer', fontSize: 12, padding: 0 }}>✕</button>
             </span>
           )}
         </div>
@@ -247,19 +284,29 @@ export default function AccoglienzaDashboard() {
       {operatori.length > 0 && (
         <div style={{ background: '#1e293b', borderTop: '2px solid #334155', padding: '6px 16px', display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', flexShrink: 0 }}>
           <span style={{ fontSize: 11, color: '#64748b', fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', marginRight: 4 }}>Operatori:</span>
-          {operatori.map((op) => (
-            <div key={op.id} style={{
-              display: 'flex', alignItems: 'center', gap: 5,
-              background: op.stato === 'ATTIVO' ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)',
-              border: `1px solid ${op.stato === 'ATTIVO' ? 'rgba(34,197,94,0.3)' : 'rgba(245,158,11,0.3)'}`,
-              borderRadius: 4, padding: '2px 8px',
-            }}>
-              <span style={{ width: 7, height: 7, borderRadius: '50%', background: op.stato === 'ATTIVO' ? '#22c55e' : '#f59e0b', display: 'inline-block', flexShrink: 0 }} />
-              <span style={{ fontSize: 12, color: 'white', fontWeight: 600 }}>
-                {op.cognome} {op.nome}{op.postazione ? ` — ${op.postazione}` : ''}
-              </span>
-            </div>
-          ))}
+          {operatori.map((op) => {
+            if (!op || op.id == null) return null;
+            const pausaSecs = op.stato === 'PAUSA' && op.pausaInizio
+              ? Math.floor((now - new Date(op.pausaInizio).getTime()) / 1000)
+              : null;
+            const pausaStr = pausaSecs != null && pausaSecs >= 0
+              ? `${Math.floor(pausaSecs / 60)}:${(pausaSecs % 60).toString().padStart(2, '0')}`
+              : null;
+            return (
+              <div key={op.id} style={{
+                display: 'flex', alignItems: 'center', gap: 5,
+                background: op.stato === 'ATTIVO' ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)',
+                border: `1px solid ${op.stato === 'ATTIVO' ? 'rgba(34,197,94,0.3)' : 'rgba(245,158,11,0.3)'}`,
+                borderRadius: 4, padding: '2px 8px',
+              }}>
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: op.stato === 'ATTIVO' ? '#22c55e' : '#f59e0b', display: 'inline-block', flexShrink: 0 }} />
+                <span style={{ fontSize: 12, color: 'white', fontWeight: 600 }}>
+                  {op.cognome} {op.nome}{op.postazione ? ` — ${op.postazione}` : ''}
+                  {pausaStr && <span style={{ fontFamily: 'monospace', fontSize: 10, color: '#fde68a', marginLeft: 4 }}>⏸ {pausaStr}</span>}
+                </span>
+              </div>
+            );
+          })}
         </div>
       )}
 

@@ -101,22 +101,32 @@ export function attachWebSocketServer(server: Server): void {
  * - ultimiChiamati: ultimi 10 numeri chiamati (globali per il monitor, per area per gli altri)
  */
 async function sendInitialState(ws: WebSocket, aree: number[], isMonitor: boolean): Promise<void> {
-  // Ultimi 10 chiamati con numero ticket reale
+  // Solo dati di oggi
+  const oggi = new Date();
+  oggi.setHours(0, 0, 0, 0);
+  const domani = new Date(oggi);
+  domani.setDate(domani.getDate() + 1);
+
+  // Ultimi 15 chiamati di oggi con numero ticket reale
   const ultimiChiamati = await prisma.chiamata.findMany({
-    where: isMonitor ? {} : { servizio: { areaId: { in: aree } } },
+    where: {
+      timestamp: { gte: oggi, lt: domani },
+      ...(isMonitor ? {} : { servizio: { areaId: { in: aree } } }),
+    },
     orderBy: { timestamp: 'desc' },
-    take: 10,
+    take: 15,
     include: {
       servizio: { select: { nome: true, lettera: true, area: { select: { prefisso: true } } } },
       ticket:   { select: { numero: true } },
     },
   });
 
-  // Code per area
+  // Code per area — solo ticket ATTESA di oggi
   const codeRaw = await prisma.ticket.groupBy({
     by: ['servizioId'],
     where: {
       stato: 'ATTESA',
+      emessoPer: { gte: oggi, lt: domani },
       ...(isMonitor ? {} : { servizio: { areaId: { in: aree } } }),
     },
     _count: { _all: true },

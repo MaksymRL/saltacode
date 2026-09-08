@@ -2,6 +2,29 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../prisma/client.js';
 import jwt from 'jsonwebtoken';
 import { config } from '../config/index.js';
+import { authenticate, authorize } from '../middleware/auth.js';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const CONFIG_PATH = path.join(__dirname, '../../monitor-config.json');
+
+interface MonitorConfig {
+  voiceEnabled: boolean;
+}
+
+function readConfig(): MonitorConfig {
+  try {
+    return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8')) as MonitorConfig;
+  } catch {
+    return { voiceEnabled: false }; // default: voce disabilitata
+  }
+}
+
+function writeConfig(cfg: MonitorConfig): void {
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf-8');
+}
 
 const router = Router();
 
@@ -100,6 +123,27 @@ router.get('/aree', async (_req: Request, res: Response, next: NextFunction) => 
   } catch (err) {
     next(err);
   }
+});
+
+/**
+ * GET /api/monitor/config
+ * Pubblico — restituisce la configurazione del monitor (es. voce abilitata)
+ */
+router.get('/config', (_req: Request, res: Response) => {
+  res.json(readConfig());
+});
+
+/**
+ * PATCH /api/monitor/config
+ * Solo SUPERADMIN — aggiorna la configurazione del monitor
+ * Body: { voiceEnabled?: boolean }
+ */
+router.patch('/config', authenticate, authorize('SUPERADMIN'), (req: Request, res: Response) => {
+  const current = readConfig();
+  const { voiceEnabled } = req.body as { voiceEnabled?: boolean };
+  if (voiceEnabled !== undefined) current.voiceEnabled = Boolean(voiceEnabled);
+  writeConfig(current);
+  res.json(current);
 });
 
 export default router;

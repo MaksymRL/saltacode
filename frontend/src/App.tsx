@@ -47,10 +47,12 @@ function AppRoutes() {
   };
 
   // Quando il ruolo cambia (switch-role), reindirizza alla dashboard corretta
+  // Non toccare /monitor che è pubblico
   useEffect(() => {
     if (isAuthenticated && user && !user.mustChangePwd) {
       const target = dashboardByRole[user.ruolo];
-      if (target && !window.location.pathname.startsWith(target)) {
+      const currentPath = window.location.pathname;
+      if (target && !currentPath.startsWith(target) && currentPath !== '/monitor') {
         navigate(target, { replace: true });
       }
     }
@@ -67,7 +69,7 @@ function AppRoutes() {
 
   return (
     <Routes>
-      {/* Root redirect */}
+      {/* Root redirect — non toccare /monitor */}
       <Route path="/" element={<Navigate to={homePath} replace />} />
 
       {/* Login — se già autenticato, vai alla dashboard */}

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../hooks/useAuth';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import apiClient from '../../api/client';
+import Logo from '../../components/Logo';
 
 interface Area {
   id: number;
@@ -66,6 +67,27 @@ export default function SuperAdminDashboard() {
   }, []);
 
   useWebSocket({ onMessage: handleWsMessage });
+
+  // ── Config monitor voce ───────────────────────────────────────────────────
+  const [monitorVoice, setMonitorVoice] = useState<boolean | null>(null);
+  const [monitorVoiceLoading, setMonitorVoiceLoading] = useState(false);
+
+  useEffect(() => {
+    apiClient.get<{ voiceEnabled: boolean }>('/monitor/config')
+      .then((r) => setMonitorVoice(r.data.voiceEnabled))
+      .catch(() => { /* non bloccante */ });
+  }, []);
+
+  const handleToggleVoice = async () => {
+    setMonitorVoiceLoading(true);
+    try {
+      const res = await apiClient.patch<{ voiceEnabled: boolean }>('/monitor/config', {
+        voiceEnabled: !monitorVoice,
+      });
+      setMonitorVoice(res.data.voiceEnabled);
+    } catch { /* ignora */ }
+    finally { setMonitorVoiceLoading(false); }
+  };
 
   // ── Switch ruolo ──────────────────────────────────────────────────────────
   // Carica i ruoli disponibili dal localStorage (salvati al login)
@@ -201,6 +223,7 @@ export default function SuperAdminDashboard() {
 
   // Editing ruoli utente esistente
   const [editingRuoli, setEditingRuoli] = useState<{ utenteId: number; ruoli: string[] } | null>(null);
+  const [editingNome, setEditingNome] = useState<{ utenteId: number; cognome: string; nome: string } | null>(null);
   
   // Editing aree utente
   const [editingAree, setEditingAree] = useState<{ utenteId: number; aree: number[] } | null>(null);
@@ -299,6 +322,22 @@ export default function SuperAdminDashboard() {
     }
   };
 
+  const handleSalvaNome = async () => {
+    if (!editingNome) return;
+    setUtentiError('');
+    try {
+      await apiClient.patch(`/utenti/${editingNome.utenteId}`, {
+        cognome: editingNome.cognome,
+        nome: editingNome.nome,
+      });
+      setEditingNome(null);
+      setUtentiSuccess('Nome aggiornato.');
+      loadUtenti();
+    } catch (err: any) {
+      setUtentiError(err?.response?.data?.error ?? 'Errore aggiornamento nome.');
+    }
+  };
+
   const handleSalvaAree = async () => {
     if (!editingAree) return;
     setUtentiError('');
@@ -370,7 +409,10 @@ export default function SuperAdminDashboard() {
     <div style={{ minHeight: '100vh', background: '#f5f5f5', fontFamily: 'system-ui, sans-serif' }}>
       {/* Header */}
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 24px', background: '#1a1a2e', color: 'white' }}>
-        <h1 style={{ margin: 0, fontSize: 20 }}>🏢 Saltacode — SuperAdmin</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <Logo height={32} />
+          <h1 style={{ margin: 0, fontSize: 20 }}>🏢 Saltacode — SuperAdmin</h1>
+        </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           {/* Switch ruolo se disponibile */}
           {ruoliDisponibili.length > 1 && (
@@ -420,6 +462,29 @@ export default function SuperAdminDashboard() {
         {tab === 'code' && (
           <>
             <h2 style={{ marginTop: 0 }}>Code in tempo reale — tutte le aree</h2>
+
+            {/* Impostazioni monitor */}
+            <div style={{ ...cardStyle, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', marginBottom: 20, background: '#1e293b', color: 'white' }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 14 }}>🔊 Voce annunci monitor</div>
+                <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>
+                  Il plim è sempre attivo. La voce è opzionale e si applica a tutti i monitor.
+                </div>
+              </div>
+              <button
+                onClick={handleToggleVoice}
+                disabled={monitorVoiceLoading || monitorVoice === null}
+                style={{
+                  background: monitorVoice ? '#22c55e' : '#475569',
+                  color: 'white', border: 'none', borderRadius: 8,
+                  padding: '8px 20px', fontWeight: 700, fontSize: 14,
+                  cursor: monitorVoiceLoading ? 'not-allowed' : 'pointer',
+                  minWidth: 120,
+                }}
+              >
+                {monitorVoiceLoading ? '…' : monitorVoice ? '🔊 Voce ON' : '🔇 Voce OFF'}
+              </button>
+            </div>
             {code.length === 0 ? (
               <p style={{ color: '#888' }}>Nessun servizio con ticket in attesa.</p>
             ) : (
@@ -706,7 +771,34 @@ export default function SuperAdminDashboard() {
                       {utenti.map((u) => (
                         <tr key={u.id} style={{ borderBottom: '1px solid #f0f0f0' }}>
                           <td style={tdStyle}><code>{u.username}</code></td>
-                          <td style={tdStyle}>{u.cognome} {u.nome}</td>
+                          <td style={tdStyle}>
+                            {editingNome?.utenteId === u.id ? (
+                              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+                                <input
+                                  style={{ padding: '3px 6px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 4, width: 90 }}
+                                  value={editingNome.cognome}
+                                  onChange={(e) => setEditingNome((p) => p ? { ...p, cognome: e.target.value } : p)}
+                                  placeholder="Cognome"
+                                />
+                                <input
+                                  style={{ padding: '3px 6px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 4, width: 80 }}
+                                  value={editingNome.nome}
+                                  onChange={(e) => setEditingNome((p) => p ? { ...p, nome: e.target.value } : p)}
+                                  placeholder="Nome"
+                                />
+                                <button onClick={handleSalvaNome} style={btnStyle('#22c55e', 'small')}>✓</button>
+                                <button onClick={() => setEditingNome(null)} style={btnStyle('#6b7280', 'small')}>✕</button>
+                              </div>
+                            ) : (
+                              <span
+                                onClick={() => setEditingNome({ utenteId: u.id, cognome: u.cognome, nome: u.nome })}
+                                title="Click per modificare"
+                                style={{ cursor: 'pointer' }}
+                              >
+                                {u.cognome} {u.nome} <span style={{ fontSize: 10, color: '#94a3b8' }}>✏</span>
+                              </span>
+                            )}
+                          </td>
                           
                           {/* Colonna Ruoli */}
                           <td style={tdStyle}>

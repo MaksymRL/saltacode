@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import apiClient from '../api/client';
 import type { PendingAuth } from '../context/AuthContext';
+import Logo from '../components/Logo';
 
 interface LoginResponse {
   pendingToken: string;
@@ -171,7 +172,7 @@ export default function Login() {
     <div style={outerStyle}>
       <div style={cardStyle}>
         <div style={{ textAlign: 'center', marginBottom: 32 }}>
-          <div style={{ fontSize: 40, marginBottom: 8 }}>🎫</div>
+          <Logo height={52} style={{ marginBottom: 12 }} />
           <h1 style={{ margin: 0, fontSize: 24, fontWeight: 800, color: '#1a1a2e' }}>Saltacode</h1>
           <p style={{ margin: '4px 0 0', color: '#6b7280', fontSize: 14 }}>Gestione Code CISL</p>
         </div>

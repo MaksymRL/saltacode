@@ -1,25 +1,22 @@
 import PDFDocument from 'pdfkit';
 import { Writable } from 'stream';
+import fs from 'fs';
 
 interface TicketData {
-  numero: string;       // es. AA001
+  numero: string;
   nomeServizio: string;
   dataOra: Date;
-  logo?: string;        // percorso file logo (opzionale)
+  logo?: string; // percorso file PNG/JPEG (opzionale)
 }
 
 /**
- * Genera un PDF A5 per un ticket e lo restituisce come Buffer.
- * Formato A5: 148mm × 210mm = 419.53pt × 595.28pt
+ * Genera un PDF A5 per il ticket con logo, numero grande e servizio.
  */
 export async function generateTicketPdf(data: TicketData): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
 
-    const doc = new PDFDocument({
-      size: 'A5',
-      margin: 30,
-    });
+    const doc = new PDFDocument({ size: 'A5', margin: 36 });
 
     const writable = new Writable({
       write(chunk: Buffer, _encoding, callback) {
@@ -32,50 +29,62 @@ export async function generateTicketPdf(data: TicketData): Promise<Buffer> {
     writable.on('finish', () => resolve(Buffer.concat(chunks)));
     doc.pipe(writable);
 
-    // Logo (opzionale)
-    if (data.logo) {
+    const pageWidth = doc.page.width;
+    const margin = 36;
+    const contentWidth = pageWidth - margin * 2;
+
+    // ── Logo ──────────────────────────────────────────────────────
+    if (data.logo && fs.existsSync(data.logo)) {
       try {
-        doc.image(data.logo, { width: 120, align: 'center' });
-        doc.moveDown();
+        const logoW = 160;
+        const logoX = (pageWidth - logoW) / 2;
+        doc.image(data.logo, logoX, margin, { width: logoW });
+        doc.moveDown(3.5);
       } catch {
-        // Logo non trovato — continua senza
+        doc.moveDown(1);
       }
+    } else {
+      doc.font('Helvetica-Bold').fontSize(18).fillColor('#1a1a2e')
+        .text('CISL', { align: 'center' });
+      doc.moveDown(0.5);
     }
 
-    // Intestazione
-    doc
-      .font('Helvetica-Bold')
-      .fontSize(14)
-      .text('CAF CISL', { align: 'center' })
-      .moveDown(0.5);
+    // ── Linea separatrice ─────────────────────────────────────────
+    const y1 = doc.y;
+    doc.moveTo(margin, y1).lineTo(pageWidth - margin, y1).strokeColor('#e74c3c').lineWidth(2).stroke();
+    doc.moveDown(0.8);
 
-    // Nome servizio
-    doc
-      .font('Helvetica')
-      .fontSize(12)
-      .text(data.nomeServizio, { align: 'center' })
-      .moveDown(1);
+    // ── Nome servizio ─────────────────────────────────────────────
+    doc.font('Helvetica').fontSize(13).fillColor('#374151')
+      .text(data.nomeServizio, { align: 'center', width: contentWidth });
+    doc.moveDown(0.6);
 
-    // Numero ticket — grande e centrale
-    doc
-      .font('Helvetica-Bold')
-      .fontSize(64)
-      .text(data.numero, { align: 'center' })
-      .moveDown(1);
+    // ── Etichetta ─────────────────────────────────────────────────
+    doc.font('Helvetica').fontSize(10).fillColor('#9ca3af')
+      .text('IL TUO NUMERO', { align: 'center', characterSpacing: 3 });
+    doc.moveDown(0.3);
 
-    // Data e ora
+    // ── Numero ticket (grande) ────────────────────────────────────
+    doc.font('Helvetica-Bold').fontSize(72).fillColor('#e74c3c')
+      .text(data.numero, { align: 'center', width: contentWidth });
+    doc.moveDown(0.6);
+
+    // ── Linea ─────────────────────────────────────────────────────
+    const y2 = doc.y;
+    doc.moveTo(margin, y2).lineTo(pageWidth - margin, y2).strokeColor('#e2e8f0').lineWidth(1).stroke();
+    doc.moveDown(0.8);
+
+    // ── Data e ora ────────────────────────────────────────────────
     const dataFormattata = data.dataOra.toLocaleString('it-IT', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
+      day: '2-digit', month: '2-digit', year: 'numeric',
+      hour: '2-digit', minute: '2-digit',
     });
 
-    doc
-      .font('Helvetica')
-      .fontSize(10)
+    doc.font('Helvetica').fontSize(10).fillColor('#6b7280')
       .text(`Emesso il: ${dataFormattata}`, { align: 'center' });
+    doc.moveDown(0.4);
+    doc.font('Helvetica').fontSize(8).fillColor('#9ca3af')
+      .text('Conservare questo biglietto fino alla chiamata', { align: 'center' });
 
     doc.end();
   });

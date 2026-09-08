@@ -131,6 +131,21 @@ router.post('/', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res: Res
       }
     }
 
+    // Verifica che tutte le aree selezionate siano attive
+    if (aree && aree.length > 0) {
+      const areeDB = await prisma.area.findMany({
+        where: { id: { in: aree.map(Number) } },
+        select: { id: true, nome: true, attiva: true },
+      });
+      const areeDisabilitate = areeDB.filter((a) => !a.attiva);
+      if (areeDisabilitate.length > 0) {
+        res.status(400).json({
+          error: `Non puoi assegnare aree disabilitate: ${areeDisabilitate.map((a) => a.nome).join(', ')}`,
+        });
+        return;
+      }
+    }
+
     // Verifica che i ruoli richiesti esistano
     const ruoliDB = await prisma.ruolo.findMany({
       where: { nome: { in: ruoliRichiesti } },
@@ -165,6 +180,7 @@ router.post('/', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res: Res
     const passwordHash = await authService.hashPassword(passwordDaUsare);
     const mustChangePwd = !passwordCustom; // se l'admin imposta la password, non forza il cambio
 
+    // Utente creato offline — diventa ATTIVO solo al primo login
     const utente = await prisma.utente.create({
       data: {
         username,
@@ -172,7 +188,7 @@ router.post('/', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res: Res
         nome: nome!.trim(),
         passwordHash,
         mustChangePwd: mustChangePwd,
-        stato: 'ATTIVO',
+        stato: 'OFFLINE',
         utentiRuoli: {
           create: ruoliDB.map((r) => ({ ruoloId: r.id })),
         },
@@ -189,6 +205,151 @@ router.post('/', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res: Res
       res.status(409).json({ error: 'Username già in uso.' });
       return;
     }
+    next(err);
+  }
+});
+
+/**
+ * PATCH /api/utenti/me
+ * Permette all'utente autenticato di aggiornare nome, cognome e password.
+ * Lo username viene rigenerato automaticamente da nome+cognome.
+ * Body: { cognome?, nome?, currentPassword?, newPassword? }
+ */
+router.patch('/me', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = req.user!;
+    const { currentPassword, newPassword, cognome, nome } = req.body as {
+      currentPassword?: string;
+      newPassword?: string;
+      cognome?: string;
+      nome?: string;
+    };
+
+    const utente = await prisma.utente.findUnique({ where: { id: user.sub } });
+    if (!utente) { res.status(404).json({ error: 'Utente non trovato.' }); return; }
+
+    const data: Record<string, unknown> = {};
+
+    // ── Cambio nome/cognome → rigenera username automaticamente ────────────
+    if (cognome !== undefined) {
+      const trimmed = cognome.trim();
+      if (trimmed.length < 2 || trimmed.length > 50) {
+        res.status(400).json({ error: 'Cognome non valido: 2-50 caratteri.' }); return;
+      }
+      data['cognome'] = trimmed;
+    }
+    if (nome !== undefined) {
+      const trimmed = nome.trim();
+      if (trimmed.length < 2 || trimmed.length > 50) {
+        res.status(400).json({ error: 'Nome non valido: 2-50 caratteri.' }); return;
+      }
+      data['nome'] = trimmed;
+    }
+
+    if (cognome !== undefined || nome !== undefined) {
+      const nuovoCognome = (data['cognome'] as string ?? utente.cognome).trim();
+      const nuovoNome = (data['nome'] as string ?? utente.nome).trim();
+      const baseUsername = authService.generateUsername(nuovoNome, nuovoCognome);
+      let newUsernameGen = baseUsername;
+      let suffix = 2;
+      while (true) {
+        const existing = await prisma.utente.findUnique({ where: { username: newUsernameGen } });
+        if (!existing || existing.id === user.sub) break;
+        newUsernameGen = `${baseUsername}${suffix++}`;
+        if (suffix > 999) break;
+      }
+      data['username'] = newUsernameGen;
+    }
+
+    // ── Cambio password ─────────────────────────────────────────────────────
+    if (newPassword !== undefined) {
+      if (!currentPassword) {
+        res.status(400).json({ error: 'Inserire la password attuale per cambiare la password.' }); return;
+      }
+      const match = await authService.comparePassword(currentPassword, utente.passwordHash);
+      if (!match) {
+        res.status(401).json({ error: 'Password attuale non corretta.' }); return;
+      }
+      if (!authService.validatePassword(newPassword)) {
+        res.status(400).json({ error: 'La nuova password non rispetta la policy: minimo 10 caratteri, 1 maiuscola, 1 carattere speciale.' }); return;
+      }
+      data['passwordHash'] = await authService.hashPassword(newPassword);
+      data['mustChangePwd'] = false;
+    }
+
+    if (Object.keys(data).length === 0) {
+      res.status(400).json({ error: 'Nessun campo da aggiornare.' }); return;
+    }
+
+    const updated = await prisma.utente.update({ where: { id: user.sub }, data });
+
+    res.json({
+      message: 'Profilo aggiornato con successo.',
+      username: updated.username,
+      nome: updated.nome,
+      cognome: updated.cognome,
+    });
+  } catch (err: any) {
+    if (err?.code === 'P2002') {
+      res.status(409).json({ error: 'Username già in uso.' }); return;
+    }
+    next(err);
+  }
+});
+
+/**
+ * PATCH /api/utenti/me/stato
+ * Body: { stato: 'ATTIVO' | 'PAUSA' }
+ */
+router.patch('/me/stato', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = req.user!;
+    const { stato } = req.body as { stato?: string };
+
+    if (!stato) {
+      res.status(400).json({ error: 'Campi obbligatori mancanti.', fields: ['stato'] }); return;
+    }
+    if (!['ATTIVO', 'PAUSA'].includes(stato)) {
+      res.status(400).json({ error: 'Stato non valido. Valori ammessi: ATTIVO, PAUSA' }); return;
+    }
+
+    const utente = await prisma.utente.findUnique({
+      where: { id: user.sub },
+      include: { utentiAree: true, utentiRuoli: { include: { ruolo: true } } },
+    });
+    if (!utente) { res.status(404).json({ error: 'Utente non trovato.' }); return; }
+
+    const hasOperatoreRole = utente.utentiRuoli.some((ur) => ur.ruolo.nome === 'OPERATORE');
+    if (!hasOperatoreRole) {
+      res.status(403).json({ error: 'Solo gli operatori possono modificare il proprio stato.' }); return;
+    }
+
+    const updatedUtente = await prisma.utente.update({
+      where: { id: user.sub },
+      data: { stato },
+      include: INCLUDE_UTENTE,
+    });
+
+    const ultimaChiamata = await prisma.chiamata.findFirst({
+      where: { utenteId: user.sub },
+      orderBy: { timestamp: 'desc' },
+      select: { postazione: true },
+    });
+
+    const utenteAree = updatedUtente.utentiAree.map((ua) => ua.areaId);
+    utenteAree.forEach((areaId) => {
+      wsService.broadcastAll(areaId, {
+        type: 'STATO_OPERATORE',
+        utenteId: updatedUtente.id,
+        username: updatedUtente.username,
+        stato: stato as 'ATTIVO' | 'PAUSA' | 'DISABILITATO',
+        postazione: ultimaChiamata?.postazione ?? null,
+        pausaInizio: stato === 'PAUSA' ? new Date().toISOString() : null,
+      });
+    });
+
+    res.json(sanitize(updatedUtente));
+  } catch (err) {
     next(err);
   }
 });
@@ -262,13 +423,34 @@ router.patch('/:id', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res:
     const data: Record<string, unknown> = {};
     if (cognome !== undefined) data['cognome'] = cognome.trim();
     if (nome !== undefined) data['nome'] = nome.trim();
+
+    // Se cambiano nome o cognome, aggiorna lo username di conseguenza
+    if (cognome !== undefined || nome !== undefined) {
+      const nuovoCognome = (cognome ?? target.cognome).trim();
+      const nuovoNome = (nome ?? target.nome).trim();
+      const baseUsername = authService.generateUsername(nuovoNome, nuovoCognome);
+      // Solo se lo username attuale era quello generato automaticamente (non personalizzato)
+      // Lo aggiorniamo sempre quando admin/superadmin cambiano nome/cognome
+      let newUsername = baseUsername;
+      let suffix = 2;
+      while (true) {
+        const existing = await prisma.utente.findUnique({ where: { username: newUsername } });
+        if (!existing || existing.id === id) break;
+        newUsername = `${baseUsername}${suffix++}`;
+        if (suffix > 999) break;
+      }
+      data['username'] = newUsername;
+    }
+
     if (stato !== undefined) {
-      const valid = ['ATTIVO', 'PAUSA', 'DISABILITATO'];
+      const valid = ['ATTIVO', 'PAUSA', 'DISABILITATO', 'OFFLINE'];
       if (!valid.includes(stato)) {
         res.status(400).json({ error: `Stato non valido. Valori ammessi: ${valid.join(', ')}` });
         return;
       }
-      data['stato'] = stato;
+      // Riabilitare un utente lo rimette OFFLINE, non ATTIVO
+      // Diventerà ATTIVO solo al prossimo login
+      data['stato'] = stato === 'ATTIVO' ? 'OFFLINE' : stato;
     }
 
     let tempPassword: string | undefined;
@@ -465,175 +647,6 @@ router.post('/change-password', async (req: Request, res: Response, next: NextFu
     await prisma.utente.update({ where: { id: user.sub }, data: { passwordHash, mustChangePwd: false } });
 
     res.json({ message: 'Password aggiornata con successo.' });
-  } catch (err) {
-    next(err);
-  }
-});
-
-/**
- * PATCH /api/utenti/me
- * Permette all'utente autenticato di aggiornare il proprio username e/o password.
- * Body: { username?: string, currentPassword?: string, newPassword?: string }
- */
-router.patch('/me', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const user = req.user!;
-    const { username: newUsername, currentPassword, newPassword, cognome, nome } = req.body as {
-      username?: string;
-      currentPassword?: string;
-      newPassword?: string;
-      cognome?: string;
-      nome?: string;
-    };
-
-    const utente = await prisma.utente.findUnique({ where: { id: user.sub } });
-    if (!utente) { res.status(404).json({ error: 'Utente non trovato.' }); return; }
-
-    const data: Record<string, unknown> = {};
-
-    // ── Cambio nome/cognome ─────────────────────────────────────────────────
-    if (cognome !== undefined) {
-      const trimmed = cognome.trim();
-      if (trimmed.length < 2 || trimmed.length > 50) {
-        res.status(400).json({ error: 'Cognome non valido: 2-50 caratteri.' });
-        return;
-      }
-      data['cognome'] = trimmed;
-    }
-    if (nome !== undefined) {
-      const trimmed = nome.trim();
-      if (trimmed.length < 2 || trimmed.length > 50) {
-        res.status(400).json({ error: 'Nome non valido: 2-50 caratteri.' });
-        return;
-      }
-      data['nome'] = trimmed;
-    }
-
-    // ── Cambio username ─────────────────────────────────────────────────────
-    if (newUsername !== undefined) {
-      const trimmed = newUsername.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
-      if (trimmed.length < 3 || trimmed.length > 30) {
-        res.status(400).json({ error: 'Username non valido: 3-30 caratteri alfanumerici o underscore.' });
-        return;
-      }
-      // Verifica unicità
-      const existing = await prisma.utente.findUnique({ where: { username: trimmed } });
-      if (existing && existing.id !== user.sub) {
-        res.status(409).json({ error: 'Username già in uso.' });
-        return;
-      }
-      data['username'] = trimmed;
-    }
-
-    // ── Cambio password ─────────────────────────────────────────────────────
-    if (newPassword !== undefined) {
-      if (!currentPassword) {
-        res.status(400).json({ error: 'Inserire la password attuale per cambiare la password.' });
-        return;
-      }
-      const match = await authService.comparePassword(currentPassword, utente.passwordHash);
-      if (!match) {
-        res.status(401).json({ error: 'Password attuale non corretta.' });
-        return;
-      }
-      if (!authService.validatePassword(newPassword)) {
-        res.status(400).json({ error: 'La nuova password non rispetta la policy: minimo 10 caratteri, 1 maiuscola, 1 carattere speciale.' });
-        return;
-      }
-      data['passwordHash'] = await authService.hashPassword(newPassword);
-      data['mustChangePwd'] = false;
-    }
-
-    if (Object.keys(data).length === 0) {
-      res.status(400).json({ error: 'Nessun campo da aggiornare.' });
-      return;
-    }
-
-    const updated = await prisma.utente.update({ where: { id: user.sub }, data });
-
-    res.json({
-      message: 'Profilo aggiornato con successo.',
-      username: updated.username,
-      nome: updated.nome,
-      cognome: updated.cognome,
-    });
-  } catch (err: any) {
-    if (err?.code === 'P2002') {
-      res.status(409).json({ error: 'Username già in uso.' });
-      return;
-    }
-    next(err);
-  }
-});
-
-/**
- * PATCH /api/utenti/me/stato
- * Body: { stato: 'ATTIVO' | 'PAUSA' }
- * Permette agli operatori di cambiare il proprio stato operativo
- */
-router.patch('/me/stato', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const user = req.user!;
-    const { stato } = req.body as { stato?: string };
-
-    if (!stato) {
-      res.status(400).json({ error: 'Campi obbligatori mancanti.', fields: ['stato'] });
-      return;
-    }
-
-    // Solo ATTIVO e PAUSA sono permessi per gli operatori (non DISABILITATO)
-    if (!['ATTIVO', 'PAUSA'].includes(stato)) {
-      res.status(400).json({ error: 'Stato non valido. Valori ammessi: ATTIVO, PAUSA' });
-      return;
-    }
-
-    // Verifica che l'utente sia effettivamente un operatore
-    const utente = await prisma.utente.findUnique({
-      where: { id: user.sub },
-      include: { 
-        utentiAree: true,
-        utentiRuoli: { include: { ruolo: true } }
-      },
-    });
-
-    if (!utente) {
-      res.status(404).json({ error: 'Utente non trovato.' });
-      return;
-    }
-
-    const hasOperatoreRole = utente.utentiRuoli.some((ur) => ur.ruolo.nome === 'OPERATORE');
-    if (!hasOperatoreRole) {
-      res.status(403).json({ error: 'Solo gli operatori possono modificare il proprio stato.' });
-      return;
-    }
-
-    // Aggiorna lo stato
-    const updatedUtente = await prisma.utente.update({
-      where: { id: user.sub },
-      data: { stato },
-      include: INCLUDE_UTENTE,
-    });
-
-    // Recupera l'ultima postazione usata dall'operatore
-    const ultimaChiamata = await prisma.chiamata.findFirst({
-      where: { utenteId: user.sub },
-      orderBy: { timestamp: 'desc' },
-      select: { postazione: true },
-    });
-
-    // Invia broadcast WebSocket a tutte le aree dell'operatore
-    const utenteAree = updatedUtente.utentiAree.map((ua) => ua.areaId);
-    utenteAree.forEach((areaId) => {
-      wsService.broadcastAll(areaId, {
-        type: 'STATO_OPERATORE',
-        utenteId: updatedUtente.id,
-        username: updatedUtente.username,
-        stato: stato as 'ATTIVO' | 'PAUSA' | 'DISABILITATO',
-        postazione: ultimaChiamata?.postazione ?? null,
-      });
-    });
-
-    res.json(sanitize(updatedUtente));
   } catch (err) {
     next(err);
   }

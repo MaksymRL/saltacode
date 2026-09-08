@@ -4,6 +4,7 @@ import { useWebSocket } from '../../hooks/useWebSocket';
 import apiClient from '../../api/client';
 import RoleSwitcher from '../../components/RoleSwitcher';
 import AccountSettings from '../AccountSettings';
+import Logo from '../../components/Logo';
 
 interface Servizio {
   id: number;
@@ -26,6 +27,7 @@ interface OperatoreStato {
   nome: string;
   stato: 'ATTIVO' | 'PAUSA' | 'DISABILITATO';
   postazione?: string | null;
+  pausaInizio?: string | null; // ISO timestamp di quando è entrato in pausa
 }
 
 export default function OperatoreDashboard() {
@@ -97,6 +99,12 @@ export default function OperatoreDashboard() {
 
   // ── Colleghi ──────────────────────────────────────────────────────────────
   const [colleghi, setColleghi] = useState<OperatoreStato[]>([]);
+  // Ticker ogni secondo per aggiornare i timer di pausa senza hook nei figli
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
   const loadColleghi = useCallback(async () => {
     try { const r = await apiClient.get<OperatoreStato[]>('/utenti/operatori'); setColleghi(r.data); }
     catch { /* non bloccante */ }
@@ -119,8 +127,24 @@ export default function OperatoreDashboard() {
       setCode((prev) => prev.map((c) => c.servizioId === servizioId ? { ...c, count: Math.max(0, c.count - 1) } : c));
     }
     if (msg.type === 'STATO_OPERATORE') {
-      const { utenteId, stato, postazione: p } = msg as unknown as { utenteId: number; stato: 'ATTIVO' | 'PAUSA' | 'DISABILITATO'; postazione?: string | null };
-      setColleghi((prev) => prev.map((c) => c.id === utenteId ? { ...c, stato, postazione: p ?? c.postazione } : c));
+      const { utenteId, stato, postazione: p, pausaInizio } = msg as unknown as {
+        utenteId: number; stato: 'ATTIVO' | 'PAUSA' | 'DISABILITATO';
+        postazione?: string | null; pausaInizio?: string | null;
+      };
+      setColleghi((prev) => {
+        const exists = prev.find((c) => c.id === utenteId);
+        if (exists) {
+          return prev
+            .map((c) => c.id === utenteId
+              ? { ...c, stato, postazione: p ?? c.postazione, pausaInizio: stato === 'PAUSA' ? (pausaInizio ?? c.pausaInizio) : null }
+              : c
+            )
+            .filter((c) => c && c.id != null); // sicurezza anti-undefined
+        }
+        // Operatore nuovo — lo aggiungiamo al prossimo refresh naturale
+        // (non fare apiClient dentro setState — causa race conditions)
+        return prev.filter((c) => c && c.id != null);
+      });
     }
   }, []);
   useWebSocket({ onMessage: handleWsMessage });
@@ -132,12 +156,22 @@ export default function OperatoreDashboard() {
     if (!postazione || isPausa) return;
     setError(''); setCalling(s.id);
     try {
-      const res = await apiClient.post<{ chiamata: { id: number; ticketNumero: string; postazione: string } }>('/chiamate', { servizioId: s.id, postazione });
-      const { chiamata } = res.data;
+      const res = await apiClient.post<{ chiamata?: { id: number; ticketNumero: string; postazione: string } }>(
+        '/chiamate', { servizioId: s.id, postazione }
+      );
+      const chiamata = res.data?.chiamata;
+      if (!chiamata) {
+        setError(`Nessun ticket in attesa per ${s.nome}.`);
+        return;
+      }
       setLastCalls((prev) => new Map(prev).set(s.id, { chiamataId: chiamata.id, ticketNumero: chiamata.ticketNumero }));
       setSpotlight({ numero: chiamata.ticketNumero, servizio: s.nome, post: String(chiamata.postazione) });
     } catch (err: any) {
-      setError(err?.response?.status === 204 ? `Nessun ticket per ${s.nome}.` : (err?.response?.data?.error ?? 'Errore.'));
+      if (err?.response?.status === 204 || err?.response?.data?.message?.includes('attesa')) {
+        setError(`Nessun ticket in attesa per ${s.nome}.`);
+      } else {
+        setError(err?.response?.data?.error ?? 'Errore chiamata.');
+      }
     } finally { setCalling(null); }
   };
 
@@ -197,11 +231,11 @@ export default function OperatoreDashboard() {
   }
 
   // ── Dashboard principale ──────────────────────────────────────────────────
-  const altriOperatori = colleghi.filter((c) => c.id !== user?.id);
+  const altriOperatori = colleghi.filter((c) => c != null && c.id != null && c.id !== user?.id);
 
-  // Raggruppa servizi per area
+  // Raggruppa servizi per area — filtra elementi undefined/null per sicurezza
   const areeMap = new Map<number, { area: Servizio['area']; servizi: Servizio[] }>();
-  servizi.forEach((s) => {
+  servizi.filter((s) => s != null && s.id != null && s.area != null).forEach((s) => {
     if (!areeMap.has(s.areaId)) areeMap.set(s.areaId, { area: s.area, servizi: [] });
     areeMap.get(s.areaId)!.servizi.push(s);
   });
@@ -218,6 +252,7 @@ export default function OperatoreDashboard() {
         flexShrink: 0, transition: 'background 0.3s',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Logo height={26} />
           <span style={{ background: isPausa ? '#f59e0b' : '#533483', borderRadius: 4, padding: '3px 10px', fontWeight: 900, fontSize: 16, letterSpacing: 1 }}>
             {isPausa ? '⏸' : '🖥️'} Post. {postazione}
           </span>
@@ -363,19 +398,29 @@ export default function OperatoreDashboard() {
       {altriOperatori.length > 0 && (
         <div style={{ background: '#1e293b', borderTop: '2px solid #334155', padding: '5px 16px', display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', flexShrink: 0 }}>
           <span style={{ fontSize: 10, color: '#64748b', fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', marginRight: 4 }}>Colleghi:</span>
-          {altriOperatori.map((op) => (
-            <div key={op.id} style={{
-              display: 'flex', alignItems: 'center', gap: 4,
-              background: op.stato === 'ATTIVO' ? 'rgba(34,197,94,0.12)' : 'rgba(245,158,11,0.12)',
-              border: `1px solid ${op.stato === 'ATTIVO' ? 'rgba(34,197,94,0.25)' : 'rgba(245,158,11,0.25)'}`,
-              borderRadius: 3, padding: '2px 7px',
-            }}>
-              <span style={{ width: 6, height: 6, borderRadius: '50%', background: op.stato === 'ATTIVO' ? '#22c55e' : '#f59e0b', display: 'inline-block', flexShrink: 0 }} />
-              <span style={{ fontSize: 11, color: 'white', fontWeight: 600 }}>
-                {op.cognome} {op.nome}{op.postazione ? ` — ${op.postazione}` : ''}
-              </span>
-            </div>
-          ))}
+          {altriOperatori.map((op) => {
+            if (!op || op.id == null) return null;
+            const pausaSecs = op.stato === 'PAUSA' && op.pausaInizio
+              ? Math.floor((now - new Date(op.pausaInizio).getTime()) / 1000)
+              : null;
+            const pausaStr = pausaSecs != null && pausaSecs >= 0
+              ? `${Math.floor(pausaSecs / 60)}:${(pausaSecs % 60).toString().padStart(2, '0')}`
+              : null;
+            return (
+              <div key={op.id} style={{
+                display: 'flex', alignItems: 'center', gap: 4,
+                background: op.stato === 'ATTIVO' ? 'rgba(34,197,94,0.12)' : 'rgba(245,158,11,0.12)',
+                border: `1px solid ${op.stato === 'ATTIVO' ? 'rgba(34,197,94,0.25)' : 'rgba(245,158,11,0.25)'}`,
+                borderRadius: 3, padding: '2px 7px',
+              }}>
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: op.stato === 'ATTIVO' ? '#22c55e' : '#f59e0b', display: 'inline-block', flexShrink: 0 }} />
+                <span style={{ fontSize: 11, color: 'white', fontWeight: 600 }}>
+                  {op.cognome} {op.nome}{op.postazione ? ` — ${op.postazione}` : ''}
+                  {pausaStr && <span style={{ fontFamily: 'monospace', fontSize: 10, color: '#fde68a', marginLeft: 4 }}>⏸ {pausaStr}</span>}
+                </span>
+              </div>
+            );
+          })}
         </div>
       )}
 

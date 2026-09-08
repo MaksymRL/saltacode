@@ -3,6 +3,11 @@ import { authenticate, authorize } from '../middleware/auth.js';
 import * as ticketService from '../services/ticketService.js';
 import * as pdfService from '../services/pdfService.js';
 import { prisma } from '../prisma/client.js';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const LOGO_PATH = path.join(__dirname, 'logo-test.png');
 
 const router = Router();
 
@@ -45,6 +50,7 @@ router.post('/', authorize('ACCOGLIENZA'), async (req: Request, res: Response, n
       numero: ticket.numero,
       nomeServizio: servizio?.nome ?? 'Servizio',
       dataOra: ticket.emessoPer,
+      logo: LOGO_PATH,
     });
 
     res.json({
@@ -94,6 +100,52 @@ router.get('/', authorize('SUPERADMIN', 'ADMIN', 'ACCOGLIENZA', 'OPERATORE'), as
   } catch (err) {
     next(err);
   }
+});
+
+/**
+ * DELETE /api/ticket/:id
+ * Roles: ACCOGLIENZA
+ * Annulla un ticket in stato ATTESA (non ancora chiamato).
+ * Usato quando l'utente emette un ticket ma poi annulla la stampa.
+ */
+router.delete('/:id', authorize('ACCOGLIENZA', 'ADMIN', 'SUPERADMIN'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = parseInt(req.params['id'] ?? '', 10);
+    if (isNaN(id)) { res.status(400).json({ error: 'ID non valido.' }); return; }
+
+    const ticket = await prisma.ticket.findUnique({
+      where: { id },
+      include: { servizio: { include: { area: true } } },
+    });
+
+    if (!ticket) { res.status(404).json({ error: 'Ticket non trovato.' }); return; }
+    if (ticket.stato !== 'ATTESA') {
+      res.status(400).json({ error: 'Solo i ticket in ATTESA possono essere annullati.' });
+      return;
+    }
+
+    await prisma.$transaction([
+      prisma.ticket.update({ where: { id }, data: { stato: 'ANNULLATO' } }),
+      // Decrementa il contatore giornaliero
+      prisma.contatoreGiornaliero.updateMany({
+        where: {
+          servizioId: ticket.servizioId,
+          ultimoNumero: { gt: 0 },
+        },
+        data: { ultimoNumero: { decrement: 1 } },
+      }),
+    ]);
+
+    // Aggiorna la coda via WebSocket
+    const codaRimasta = await prisma.ticket.count({
+      where: { servizioId: ticket.servizioId, stato: 'ATTESA' },
+    });
+    const { broadcast, broadcastMonitor } = await import('../services/wsService.js');
+    broadcast(ticket.servizio.areaId, { type: 'TICKET_EMESSO', servizioId: ticket.servizioId, coda: codaRimasta });
+    broadcastMonitor({ type: 'TICKET_EMESSO', servizioId: ticket.servizioId, coda: codaRimasta });
+
+    res.status(204).send();
+  } catch (err) { next(err); }
 });
 
 export default router;

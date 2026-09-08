@@ -14,7 +14,7 @@ router.use(authenticate);
  * Body: { servizioId: number, postazione: string }
  * Postazione: 1-2 cifre + lettera opzionale (es. "1", "12", "3A", "12B")
  */
-router.post('/', authorize('OPERATORE'), async (req: Request, res: Response, next: NextFunction) => {
+router.post('/', authorize('OPERATORE', 'ADMIN', 'SUPERADMIN'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { servizioId, postazione } = req.body as { servizioId?: number; postazione?: string };
 
@@ -32,7 +32,7 @@ router.post('/', authorize('OPERATORE'), async (req: Request, res: Response, nex
     const result = await queueService.callNext(Number(servizioId), posStr, req.user!.sub);
 
     if (!result) {
-      res.status(204).json({ message: 'Nessun ticket in attesa per questo servizio.' });
+      res.status(200).json({ chiamata: null, message: 'Nessun ticket in attesa per questo servizio.' });
       return;
     }
 
@@ -62,7 +62,7 @@ router.post('/', authorize('OPERATORE'), async (req: Request, res: Response, nex
  * Richiama un numero specifico già chiamato in precedenza.
  * Utile per richiamare clienti che non si sono presentati.
  */
-router.post('/recall', authorize('OPERATORE'), async (req: Request, res: Response, next: NextFunction) => {
+router.post('/recall', authorize('OPERATORE', 'ADMIN', 'SUPERADMIN'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { ticketNumero, postazione } = req.body as { ticketNumero?: string; postazione?: string };
 
@@ -131,7 +131,7 @@ router.post('/recall', authorize('OPERATORE'), async (req: Request, res: Respons
  * Roles: OPERATORE
  * Annulla l'ultima chiamata, rimette il ticket in testa alla coda (stato ATTESA)
  */
-router.delete('/:id', authorize('OPERATORE'), async (req: Request, res: Response, next: NextFunction) => {
+router.delete('/:id', authorize('OPERATORE', 'ADMIN', 'SUPERADMIN'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = parseInt(req.params['id'] ?? '', 10);
     if (isNaN(id)) {

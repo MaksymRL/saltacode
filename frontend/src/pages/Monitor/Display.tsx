@@ -10,24 +10,94 @@ interface ChiamataEntry {
 export default function MonitorDisplay() {
   const [history, setHistory] = useState<ChiamataEntry[]>([]);
   const [connected, setConnected] = useState(false);
-  const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [ttsSupported] = useState('speechSynthesis' in window);
+  const [voiceEnabled, setVoiceEnabled] = useState(false);
+  const [voiceConfigLoaded, setVoiceConfigLoaded] = useState(false);
   const [time, setTime] = useState(new Date());
+  // audioUnlocked: true dopo il primo click utente — sblocca AudioContext e TTS
+  const [audioUnlocked, setAudioUnlocked] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const retryCountRef = useRef(0);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const femaleVoiceRef = useRef<SpeechSynthesisVoice | null>(null);
 
-  // ── Orologio ─────────────────────────────────────────────────────────────
+  // ── Sblocco audio al click (richiesto dai browser moderni) ───────────────
+  const handleUnlockAudio = useCallback(() => {
+    // Inizializza AudioContext (richiede gesto utente)
+    try {
+      if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
+        audioCtxRef.current = new AudioContext();
+      }
+      audioCtxRef.current.resume();
+    } catch { /* ignora */ }
+
+    // Pre-carica TTS con utterance silenziosa per sbloccare il browser
+    if ('speechSynthesis' in window) {
+      const u = new SpeechSynthesisUtterance('');
+      u.volume = 0;
+      window.speechSynthesis.speak(u);
+    }
+
+    setAudioUnlocked(true);
+
+    // Fai un plim di test dopo lo sblocco
+    setTimeout(() => {
+      try {
+        const ctx = audioCtxRef.current!;
+        if (ctx.state === 'suspended') ctx.resume();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.type = 'sine'; osc.frequency.value = 880;
+        gain.gain.setValueAtTime(0, ctx.currentTime);
+        gain.gain.linearRampToValueAtTime(0.5, ctx.currentTime + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+        osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.5);
+      } catch { /* ignora */ }
+    }, 100);
+  }, []);
+
+  // ── Orologio ──────────────────────────────────────────────────────────────
   useEffect(() => {
     const t = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
 
-  // ── Plim con AudioContext (non disabilitabile) ─────────────────────────────
+  // ── Carica configurazione voce dal backend ─────────────────────────────────
+  useEffect(() => {
+    fetch('/api/monitor/config')
+      .then((r) => r.json())
+      .then((cfg: { voiceEnabled: boolean }) => {
+        setVoiceEnabled(cfg.voiceEnabled);
+        setVoiceConfigLoaded(true);
+      })
+      .catch(() => setVoiceConfigLoaded(true));
+  }, []);
+
+  // ── Trova voce femminile italiana ──────────────────────────────────────────
+  useEffect(() => {
+    if (!('speechSynthesis' in window)) return;
+    const findFemale = () => {
+      const voices = window.speechSynthesis.getVoices();
+      if (voices.length === 0) return;
+      // Priorità: voce italiana femminile esplicita, poi italiana, poi prima disponibile
+      const itFemale = voices.find((v) =>
+        v.lang.startsWith('it') && /female|donna|alice|paola|lisa/i.test(v.name)
+      );
+      const itAny = voices.find((v) => v.lang.startsWith('it'));
+      femaleVoiceRef.current = itFemale ?? itAny ?? voices[0] ?? null;
+    };
+    findFemale();
+    window.speechSynthesis.onvoiceschanged = findFemale;
+    return () => { window.speechSynthesis.onvoiceschanged = null; };
+  }, []);
+
+  // ── Plim con AudioContext — più lungo e corposo ────────────────────────────
   const playPlim = useCallback(() => {
+    if (!audioUnlocked) return; // non suonare finché il browser non è stato sbloccato
     try {
       if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
         audioCtxRef.current = new AudioContext();
@@ -35,28 +105,30 @@ export default function MonitorDisplay() {
       const ctx = audioCtxRef.current;
       if (ctx.state === 'suspended') ctx.resume();
 
-      // Due toni brevi (plim plim)
-      const playTone = (startTime: number, freq: number, duration: number) => {
+      const playTone = (startTime: number, freq: number, dur: number, vol: number = 0.7) => {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.type = 'sine';
-        osc.frequency.value = freq;
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.type = 'sine'; osc.frequency.value = freq;
         gain.gain.setValueAtTime(0, startTime);
-        gain.gain.linearRampToValueAtTime(0.6, startTime + 0.01);
-        gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
-        osc.start(startTime);
-        osc.stop(startTime + duration);
+        gain.gain.linearRampToValueAtTime(vol, startTime + 0.015);
+        // Sustain poi fade out
+        gain.gain.setValueAtTime(vol, startTime + dur * 0.6);
+        gain.gain.exponentialRampToValueAtTime(0.001, startTime + dur);
+        osc.start(startTime); osc.stop(startTime + dur + 0.05);
       };
 
       const now = ctx.currentTime;
-      playTone(now,        880, 0.18); // primo plim (La5)
-      playTone(now + 0.22, 1047, 0.18); // secondo plim (Do6)
+      // Primo plim: La5 (880 Hz) — 0.5s
+      playTone(now, 880, 0.5, 0.7);
+      // Secondo plim: Do6 (1047 Hz) — 0.5s, dopo 0.6s
+      playTone(now + 0.6, 1047, 0.5, 0.7);
+      // Terzo tono più basso per risonanza — opzionale
+      playTone(now + 0.0, 440, 0.5, 0.2); // armonica
     } catch { /* ignora errori audio */ }
-  }, []);
+  }, [audioUnlocked]);
 
-  // ── Coda TTS serializzata ─────────────────────────────────────────────────
+  // ── Coda TTS serializzata con voce femminile ───────────────────────────────
   const ttsQueueRef = useRef<string[]>([]);
   const ttsSpeakingRef = useRef(false);
 
@@ -71,7 +143,8 @@ export default function MonitorDisplay() {
     utterance.lang = 'it-IT';
     utterance.rate = 0.82;
     utterance.volume = 1.0;
-    utterance.pitch = 1.0;
+    utterance.pitch = 1.1; // pitch leggermente più alto per voce femminile
+    if (femaleVoiceRef.current) utterance.voice = femaleVoiceRef.current;
 
     utterance.onend = () => { ttsSpeakingRef.current = false; setTimeout(ttsProcessQueue, 400); };
     utterance.onerror = () => { ttsSpeakingRef.current = false; setTimeout(ttsProcessQueue, 400); };
@@ -80,23 +153,23 @@ export default function MonitorDisplay() {
   }, []);
 
   const announce = useCallback((entry: ChiamataEntry) => {
-    // Plim sempre attivo
+    // Plim sempre attivo (se audio sbloccato)
     playPlim();
 
-    // Voce opzionale (ritardata di 500ms per far suonare il plim prima)
-    if (voiceEnabled && 'speechSynthesis' in window) {
+    // Voce: solo se abilitata E audio sbloccato
+    if (voiceEnabled && audioUnlocked && 'speechSynthesis' in window) {
       const numeroSolo = entry.ticket.replace(/[A-Za-z]/g, '');
       const numeroSpaced = numeroSolo.split('').join(' ');
       const text = `Numero ${numeroSpaced}, ${entry.servizio}, postazione ${entry.postazione}`;
       if (ttsQueueRef.current.length < 3) {
-        // Piccolo delay per far finire il plim
+        // Aspetta che il plim finisca (2 toni × 0.6s ≈ 1.3s)
         setTimeout(() => {
           ttsQueueRef.current.push(text);
           ttsProcessQueue();
-        }, 500);
+        }, 1300);
       }
     }
-  }, [voiceEnabled, playPlim, ttsProcessQueue]);
+  }, [voiceEnabled, audioUnlocked, playPlim, ttsProcessQueue]);
 
   // ── WebSocket ─────────────────────────────────────────────────────────────
   const connect = useCallback(async () => {
@@ -132,7 +205,12 @@ export default function MonitorDisplay() {
         }
         if (msg.type === 'INITIAL_STATE') {
           const ultimi = (msg['ultimiChiamati'] as ChiamataEntry[] | undefined) ?? [];
-          setHistory(ultimi.map(u => ({ ...u, postazione: String(u.postazione) })).slice(0, 20));
+          setHistory(ultimi.map((u) => ({ ...u, postazione: String(u.postazione) })).slice(0, 20));
+        }
+        // Aggiornamento config voce in tempo reale
+        if (msg.type === 'MONITOR_CONFIG') {
+          const { voiceEnabled: ve } = msg as unknown as { voiceEnabled: boolean };
+          setVoiceEnabled(Boolean(ve));
         }
       } catch { /* ignora */ }
     };
@@ -162,17 +240,46 @@ export default function MonitorDisplay() {
   const prev1 = history[1] ?? null;
   const prev2 = history[2] ?? null;
 
-  // Data e ora corrette con toLocaleString (usa il locale del browser)
   const timeStr = time.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   const dateStr = time.toLocaleDateString('it-IT', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
 
   return (
     <div style={S.root}>
 
+      {/* ── OVERLAY SBLOCCO AUDIO (finché non cliccato) ── */}
+      {!audioUnlocked && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 999,
+          background: 'rgba(10,10,20,0.92)',
+          display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center', gap: 24,
+          cursor: 'pointer',
+        }} onClick={handleUnlockAudio}>
+          <div style={{ fontSize: 64 }}>🔊</div>
+          <div style={{ fontSize: 28, fontWeight: 900, color: 'white', letterSpacing: 2 }}>
+            Tocca per attivare l'audio
+          </div>
+          <div style={{ fontSize: 14, color: '#94a3b8', textAlign: 'center', maxWidth: 400 }}>
+            Il browser richiede un'interazione per abilitare l'audio.<br/>
+            Clicca qui una volta, poi il monitor funzionerà automaticamente.
+          </div>
+          <button style={{
+            background: '#e74c3c', color: 'white', border: 'none',
+            borderRadius: 12, padding: '16px 48px',
+            fontSize: 18, fontWeight: 700, cursor: 'pointer',
+            boxShadow: '0 0 30px rgba(231,76,60,0.5)',
+          }}>
+            Attiva Audio
+          </button>
+        </div>
+      )}
+
       {/* ── HEADER ── */}
       <div style={S.header}>
         <div style={S.headerLogo}>
-          <span style={{ fontSize: 24, marginRight: 8 }}>🎫</span>
+          <img src="/logo.svg" alt="Logo" height={36}
+            style={{ marginRight: 12, opacity: 0.95 }}
+            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
           <span style={S.headerTitle}>SALTACODE</span>
           <span style={S.headerSub}>Sistema Gestione Code</span>
         </div>
@@ -187,17 +294,12 @@ export default function MonitorDisplay() {
 
         {/* ── SINISTRA ── */}
         <div style={S.leftPanel}>
-
-          {/* Box numero corrente */}
           <div style={S.currentBox}>
             <div style={S.currentLabel}>NUMERO IN SERVIZIO</div>
             {current ? (
               <>
-                {/* Servizio: piccolo */}
                 <div style={S.currentService}>{current.servizio}</div>
-                {/* Ticket: enorme */}
                 <div style={S.currentTicket}>{current.ticket}</div>
-                {/* Postazione: grande */}
                 <div style={S.currentPost}>Postazione {current.postazione}</div>
               </>
             ) : (
@@ -207,7 +309,6 @@ export default function MonitorDisplay() {
 
           <div style={S.prevDivider}>PRECEDENTI</div>
 
-          {/* Ultimi 2 */}
           <div style={S.prevRow}>
             {[prev1, prev2].map((entry, i) => (
               <div key={i} style={{ ...S.prevBox, opacity: entry ? 1 : 0.2, borderColor: i === 0 ? '#2ecc71' : '#3498db' }}>
@@ -262,35 +363,32 @@ export default function MonitorDisplay() {
       {/* ── FOOTER ── */}
       <div style={S.footer}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{
-            width: 10, height: 10, borderRadius: '50%', display: 'inline-block',
-            background: connected ? '#2ecc71' : '#e74c3c',
-            boxShadow: connected ? '0 0 8px #2ecc71' : '0 0 8px #e74c3c',
-          }} />
+          <span style={{ width: 10, height: 10, borderRadius: '50%', display: 'inline-block', background: connected ? '#2ecc71' : '#e74c3c', boxShadow: connected ? '0 0 8px #2ecc71' : '0 0 8px #e74c3c' }} />
           <span style={{ fontSize: 13, color: '#aaa' }}>{connected ? 'Connesso' : 'Riconnessione…'}</span>
         </div>
 
-        {/* Controllo voce — il plim è sempre attivo */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          {!ttsSupported && (
-            <span style={{ fontSize: 12, color: '#f59e0b' }}>⚠ TTS non supportato</span>
+          {!audioUnlocked ? (
+            <button onClick={handleUnlockAudio} style={{
+              background: '#e74c3c', color: 'white', border: 'none',
+              borderRadius: 6, padding: '4px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+            }}>🔊 Attiva Audio</button>
+          ) : (
+            <>
+              <span style={{ fontSize: 11, color: '#2ecc71' }}>🔔 Plim attivo</span>
+              {voiceConfigLoaded && (
+                <span style={{
+                  fontSize: 11, padding: '2px 8px', borderRadius: 4,
+                  background: voiceEnabled ? 'rgba(39,174,96,0.15)' : 'rgba(100,100,100,0.15)',
+                  border: `1px solid ${voiceEnabled ? 'rgba(39,174,96,0.3)' : 'rgba(100,100,100,0.2)'}`,
+                  color: voiceEnabled ? '#2ecc71' : '#555',
+                }}>
+                  {voiceEnabled ? '🔊 Voce ON' : '🔇 Voce OFF'}
+                </span>
+              )}
+            </>
           )}
-          {ttsSupported && (
-            <button
-              onClick={() => setVoiceEnabled((v) => !v)}
-              style={{
-                background: voiceEnabled ? 'rgba(39,174,96,0.2)' : 'rgba(231,76,60,0.2)',
-                border: `1px solid ${voiceEnabled ? '#27ae60' : '#e74c3c'}`,
-                color: voiceEnabled ? '#2ecc71' : '#e74c3c',
-                borderRadius: 6, padding: '4px 12px',
-                fontSize: 12, fontWeight: 700, cursor: 'pointer',
-              }}
-              title="Il plim è sempre attivo. Questo pulsante controlla solo l'annuncio vocale."
-            >
-              {voiceEnabled ? '🔊 Voce ON' : '🔇 Voce OFF'}
-            </button>
-          )}
-          <span style={{ fontSize: 11, color: '#444' }}>🔔 Plim sempre attivo</span>
+          {!ttsSupported && <span style={{ fontSize: 11, color: '#f59e0b' }}>⚠ TTS non supportato</span>}
         </div>
 
         <span style={{ fontSize: 12, color: '#555' }}>Saltacode Queue Management</span>
@@ -307,17 +405,8 @@ function rowColor(i: number): string {
 }
 
 const S: Record<string, React.CSSProperties> = {
-  root: {
-    display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw',
-    background: '#0f0f1a', fontFamily: "'Tahoma','Helvetica Neue',sans-serif",
-    overflow: 'hidden', color: 'white', userSelect: 'none',
-  },
-  header: {
-    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    padding: '10px 30px',
-    background: 'linear-gradient(90deg,#1a1a2e,#16213e)',
-    borderBottom: '2px solid #e74c3c', flexShrink: 0,
-  },
+  root: { display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#0f0f1a', fontFamily: "'Tahoma','Helvetica Neue',sans-serif", overflow: 'hidden', color: 'white', userSelect: 'none' },
+  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 30px', background: 'linear-gradient(90deg,#1a1a2e,#16213e)', borderBottom: '2px solid #e74c3c', flexShrink: 0 },
   headerLogo: { display: 'flex', alignItems: 'center', gap: 4 },
   headerTitle: { fontSize: 26, fontWeight: 900, letterSpacing: 4, color: '#e74c3c' },
   headerSub: { fontSize: 13, color: '#888', marginLeft: 14, letterSpacing: 1, alignSelf: 'flex-end', paddingBottom: 2 },
@@ -325,45 +414,16 @@ const S: Record<string, React.CSSProperties> = {
   clockTime: { fontSize: 32, fontWeight: 900, fontFamily: 'monospace', letterSpacing: 2, color: 'white' },
   clockDate: { fontSize: 13, color: '#888', textTransform: 'capitalize' },
   body: { display: 'flex', flex: 1, overflow: 'hidden' },
-  leftPanel: {
-    width: '62%', display: 'flex', flexDirection: 'column',
-    padding: '20px 30px', gap: 12,
-  },
-  currentBox: {
-    flex: 1, display: 'flex', flexDirection: 'column',
-    alignItems: 'center', justifyContent: 'center',
-    background: 'linear-gradient(135deg,#1a1a2e,#16213e)',
-    border: '2px solid rgba(231,76,60,0.4)', borderRadius: 12,
-    padding: '20px 30px', textAlign: 'center',
-  },
-  currentLabel: {
-    fontSize: 14, fontWeight: 700, letterSpacing: 4, color: '#e74c3c',
-    marginBottom: 8, borderBottom: '1px solid rgba(231,76,60,0.3)',
-    paddingBottom: 8, width: '100%',
-  },
-  // Servizio: più piccolo
-  currentService: {
-    fontSize: 28, fontWeight: 600, color: '#94a3b8',
-    marginBottom: 4, lineHeight: 1.2, textTransform: 'uppercase',
-  },
-  // Ticket: enorme rosso
-  currentTicket: {
-    fontSize: 140, fontWeight: 900, color: '#e74c3c',
-    lineHeight: 1, letterSpacing: 4,
-    textShadow: '0 0 40px rgba(231,76,60,0.5)',
-  },
-  // Postazione: grande bianca
-  currentPost: {
-    fontSize: 42, color: 'white', marginTop: 8, fontWeight: 800, letterSpacing: 2,
-  },
+  leftPanel: { width: '62%', display: 'flex', flexDirection: 'column', padding: '20px 30px', gap: 12 },
+  currentBox: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg,#1a1a2e,#16213e)', border: '2px solid rgba(231,76,60,0.4)', borderRadius: 12, padding: '20px 30px', textAlign: 'center' },
+  currentLabel: { fontSize: 14, fontWeight: 700, letterSpacing: 4, color: '#e74c3c', marginBottom: 8, borderBottom: '1px solid rgba(231,76,60,0.3)', paddingBottom: 8, width: '100%' },
+  currentService: { fontSize: 28, fontWeight: 600, color: '#94a3b8', marginBottom: 4, lineHeight: 1.2, textTransform: 'uppercase' },
+  currentTicket: { fontSize: 140, fontWeight: 900, color: '#e74c3c', lineHeight: 1, letterSpacing: 4, textShadow: '0 0 40px rgba(231,76,60,0.5)' },
+  currentPost: { fontSize: 42, color: 'white', marginTop: 8, fontWeight: 800, letterSpacing: 2 },
   currentEmpty: { fontSize: 40, color: '#333', fontStyle: 'italic' },
   prevDivider: { fontSize: 11, fontWeight: 700, letterSpacing: 4, color: '#333', textAlign: 'center' },
   prevRow: { display: 'flex', gap: 16, flexShrink: 0 },
-  prevBox: {
-    flex: 1, padding: '12px 16px', borderRadius: 10, border: '2px solid',
-    background: 'rgba(255,255,255,0.03)', textAlign: 'center',
-    display: 'flex', flexDirection: 'column', gap: 2,
-  },
+  prevBox: { flex: 1, padding: '12px 16px', borderRadius: 10, border: '2px solid', background: 'rgba(255,255,255,0.03)', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 2 },
   prevService: { fontSize: 14, fontWeight: 600, color: '#888' },
   prevTicket: { fontSize: 48, fontWeight: 900, letterSpacing: 2 },
   prevPost: { fontSize: 16, color: '#888', fontWeight: 700 },
@@ -371,17 +431,7 @@ const S: Record<string, React.CSSProperties> = {
   rightPanel: { flex: 1, display: 'flex', flexDirection: 'column', padding: '20px 24px', overflow: 'hidden' },
   tableTitle: { fontSize: 12, fontWeight: 700, letterSpacing: 4, color: '#444', marginBottom: 10, textAlign: 'center' },
   table: { width: '100%', borderCollapse: 'collapse' },
-  th: {
-    fontSize: 12, fontWeight: 700, color: '#555', padding: '6px 10px', textAlign: 'center',
-    borderBottom: '1px solid rgba(255,255,255,0.08)', letterSpacing: 1,
-  },
-  td: {
-    fontSize: 20, fontWeight: 600, color: '#ccc', padding: '5px 10px', textAlign: 'center',
-    borderBottom: '1px solid rgba(255,255,255,0.05)',
-  },
-  footer: {
-    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    padding: '8px 30px', background: '#0a0a14',
-    borderTop: '1px solid rgba(255,255,255,0.06)', flexShrink: 0,
-  },
+  th: { fontSize: 12, fontWeight: 700, color: '#555', padding: '6px 10px', textAlign: 'center', borderBottom: '1px solid rgba(255,255,255,0.08)', letterSpacing: 1 },
+  td: { fontSize: 20, fontWeight: 600, color: '#ccc', padding: '5px 10px', textAlign: 'center', borderBottom: '1px solid rgba(255,255,255,0.05)' },
+  footer: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 30px', background: '#0a0a14', borderTop: '1px solid rgba(255,255,255,0.06)', flexShrink: 0 },
 };

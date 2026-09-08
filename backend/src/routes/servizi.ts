@@ -99,7 +99,17 @@ router.patch('/:id', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res:
       return;
     }
 
-    const { nome, lettera, attivo } = req.body as { nome?: string; lettera?: string; attivo?: boolean };
+    const { nome, lettera, attivo, areaId } = req.body as { nome?: string; lettera?: string; attivo?: boolean; areaId?: number };
+
+    // Verifica permessi area corrente
+    const servizioAttuale = await prisma.servizio.findUnique({ where: { id } });
+    if (!servizioAttuale) { res.status(404).json({ error: 'Servizio non trovato.' }); return; }
+
+    const user = req.user!;
+    if (user.ruolo === 'ADMIN' && !user.aree.includes(servizioAttuale.areaId)) {
+      res.status(403).json({ error: 'Non autorizzato a modificare servizi di questa area.' });
+      return;
+    }
 
     const data: Record<string, unknown> = {};
     if (nome !== undefined) data['nome'] = nome.trim();
@@ -111,6 +121,14 @@ router.patch('/:id', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res:
         return;
       }
       data['lettera'] = lettUpper;
+    }
+    if (areaId !== undefined) {
+      // ADMIN può spostare il servizio solo verso una propria area
+      if (user.ruolo === 'ADMIN' && !user.aree.includes(Number(areaId))) {
+        res.status(403).json({ error: 'Non autorizzato a spostare il servizio in questa area.' });
+        return;
+      }
+      data['areaId'] = Number(areaId);
     }
 
     const servizio = await prisma.servizio.update({
