@@ -3,6 +3,7 @@ import { loginRateLimiter, recordFailedAttempt, resetAttempts } from '../middlew
 import { authenticate } from '../middleware/auth.js';
 import * as authService from '../services/authService.js';
 import { prisma } from '../prisma/client.js';
+import * as wsService from '../services/wsService.js';
 
 const router = Router();
 
@@ -83,8 +84,11 @@ router.post('/select-role', async (req: Request, res: Response, next: NextFuncti
  */
 router.post('/logout', authenticate, async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const utenteId = req.user!.sub;
+    // Libera le postazioni occupate dall'operatore
+    wsService.liberaPostazioniUtente(utenteId);
     await prisma.utente.update({
-      where: { id: req.user!.sub },
+      where: { id: utenteId },
       data: { stato: 'OFFLINE' },
     });
     res.json({ message: 'Logout effettuato.' });

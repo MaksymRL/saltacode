@@ -593,7 +593,16 @@ router.delete('/:id', authorize('SUPERADMIN', 'ADMIN'), async (req: Request, res
       }
     }
 
-    // Elimina l'utente (le relazioni vengono eliminate in cascade dal DB)
+    // Elimina prima i record con FK RESTRICT, poi l'utente
+    await prisma.$transaction([
+      // Scollega operatore dai servizi
+      prisma.operatoreServizio.deleteMany({ where: { utenteId: id } }),
+      // Anonimizza le chiamate (preserva lo storico ma rimuove il riferimento all'utente)
+      // oppure elimina direttamente se preferisci pulizia totale
+      prisma.chiamata.deleteMany({ where: { utenteId: id } }),
+    ]);
+
+    // Ora elimina l'utente (cascade elimina utenti_ruoli e utenti_aree)
     await prisma.utente.delete({ where: { id } });
 
     res.status(204).send();

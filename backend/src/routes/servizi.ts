@@ -16,11 +16,22 @@ router.get('/', authorize('SUPERADMIN', 'ADMIN', 'ACCOGLIENZA', 'OPERATORE'), as
     const user = req.user!;
     const isSuperAdmin = user.ruolo === 'SUPERADMIN';
 
+    // Inizio di oggi (mezzanotte locale → UTC)
+    const oggi = new Date();
+    oggi.setHours(0, 0, 0, 0);
+    const domani = new Date(oggi);
+    domani.setDate(domani.getDate() + 1);
+
     const servizi = await prisma.servizio.findMany({
       where: isSuperAdmin ? {} : { areaId: { in: user.aree } },
       include: {
         area: { select: { id: true, nome: true, prefisso: true } },
-        _count: { select: { ticket: { where: { stato: 'ATTESA' } } } },
+        _count: {
+          select: {
+            ticket: { where: { stato: 'ATTESA' } },
+            chiamate: { where: { timestamp: { gte: oggi, lt: domani } } },
+          },
+        },
       },
       orderBy: [{ area: { nome: 'asc' } }, { nome: 'asc' }],
     });

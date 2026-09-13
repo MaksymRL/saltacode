@@ -13,7 +13,7 @@ interface Servizio {
   attivo: boolean;
   areaId: number;
   area: { id: number; nome: string; prefisso: string };
-  _count: { ticket: number };
+  _count: { ticket: number; chiamate: number };
 }
 
 interface CodaState { servizioId: number; count: number; }
@@ -39,7 +39,7 @@ export default function OperatoreDashboard() {
   const [postazioneInput, setPostazioneInput] = useState('');
   const [postazioneError, setPostazioneError] = useState('');
 
-  const handlePostazioneSubmit = (e: React.FormEvent) => {
+  const handlePostazioneSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const val = postazioneInput.toUpperCase().trim();
     if (!/^\d{1,2}[A-Z]?$/.test(val)) {
@@ -47,7 +47,13 @@ export default function OperatoreDashboard() {
       return;
     }
     setPostazioneError('');
-    setPostazione(val);
+    // Verifica che la postazione non sia già occupata
+    try {
+      await apiClient.post('/chiamate/postazione', { postazione: val });
+      setPostazione(val);
+    } catch (err: any) {
+      setPostazioneError(err?.response?.data?.error ?? 'Errore registrazione postazione.');
+    }
   };
 
   // ── Pausa ─────────────────────────────────────────────────────────────────
@@ -125,6 +131,8 @@ export default function OperatoreDashboard() {
     if (msg.type === 'NUMERO_CHIAMATO') {
       const { servizioId } = msg as unknown as { servizioId: number };
       setCode((prev) => prev.map((c) => c.servizioId === servizioId ? { ...c, count: Math.max(0, c.count - 1) } : c));
+      // Refresh lista operatori dopo ogni chiamata
+      loadColleghi();
     }
     if (msg.type === 'STATO_OPERATORE') {
       const { utenteId, stato, postazione: p, pausaInizio } = msg as unknown as {
@@ -133,20 +141,22 @@ export default function OperatoreDashboard() {
       };
       setColleghi((prev) => {
         const exists = prev.find((c) => c.id === utenteId);
-        if (exists) {
-          return prev
-            .map((c) => c.id === utenteId
-              ? { ...c, stato, postazione: p ?? c.postazione, pausaInizio: stato === 'PAUSA' ? (pausaInizio ?? c.pausaInizio) : null }
-              : c
-            )
-            .filter((c) => c && c.id != null); // sicurezza anti-undefined
+        if (!exists) {
+          // Nuovo operatore online — ricarica lista al prossimo tick
+          if (stato !== 'DISABILITATO') {
+            setTimeout(() => loadColleghi(), 0);
+          }
+          return prev.filter((c) => c && c.id != null);
         }
-        // Operatore nuovo — lo aggiungiamo al prossimo refresh naturale
-        // (non fare apiClient dentro setState — causa race conditions)
-        return prev.filter((c) => c && c.id != null);
+        return prev
+          .map((c) => c.id === utenteId
+            ? { ...c, stato, postazione: p ?? c.postazione, pausaInizio: stato === 'PAUSA' ? (pausaInizio ?? c.pausaInizio) : null }
+            : c
+          )
+          .filter((c) => c && c.id != null);
       });
     }
-  }, []);
+  }, [loadColleghi]);
   useWebSocket({ onMessage: handleWsMessage });
 
   const getCoda = (id: number) => code.find((c) => c.servizioId === id)?.count ?? 0;
@@ -242,7 +252,7 @@ export default function OperatoreDashboard() {
   const areeGruppi = Array.from(areeMap.values());
 
   return (
-    <div style={{ minHeight: '100vh', background: '#f1f5f9', fontFamily: "'Tahoma','Helvetica Neue',sans-serif", display: 'flex', flexDirection: 'column' }}>
+    <div style={{ height: '100vh', background: '#f1f5f9', fontFamily: "'Tahoma','Helvetica Neue',sans-serif", display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
       {/* Header */}
       <header style={{
@@ -298,131 +308,116 @@ export default function OperatoreDashboard() {
         </div>
       )}
 
-      {/* Tabella servizi */}
-      <main style={{ flex: 1, overflowY: 'auto' }}>
-        {loading ? (
-          <p style={{ padding: 24, color: '#888' }}>Caricamento servizi…</p>
-        ) : servizi.length === 0 ? (
-          <p style={{ padding: 24, color: '#888', textAlign: 'center' }}>Nessun servizio attivo assegnato.</p>
-        ) : (
-          areeGruppi.map(({ area, servizi: srv }) => (
-            <div key={area.id}>
-              {/* Intestazione area */}
-              <div style={{ background: '#1e293b', color: 'white', padding: '4px 14px', fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', borderBottom: '1px solid #334155' }}>
-                {area.prefisso} — {area.nome}
-              </div>
-              <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
-                <colgroup>
-                  <col style={{ width: 60 }} />
-                  <col />
-                  <col style={{ width: 64 }} />
-                  <col style={{ width: 90 }} />
-                  <col style={{ width: 100 }} />
-                  <col style={{ width: 44 }} />
-                </colgroup>
-                <tbody>
-                  {srv.map((s, idx) => {
-                    const coda = getCoda(s.id);
-                    const last = lastCalls.get(s.id);
-                    const isCalling = calling === s.id;
-                    const isRecalling = recalling === s.id;
-                    const canCall = !isPausa && !isCalling && coda > 0;
-                    const canRecall = !isPausa && !isRecalling && !!last;
-                    const codaColor = coda === 0 ? '#64748b' : coda < 5 ? '#d97706' : '#dc2626';
+      {/* Layout due colonne */}
+      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
 
-                    return (
-                      <tr key={s.id} style={{ background: idx % 2 === 0 ? 'white' : '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
-                        {/* Codice */}
-                        <td style={{ padding: '6px 8px', textAlign: 'center' }}>
-                          <span style={{ fontWeight: 900, fontSize: 17, color: '#1e293b', letterSpacing: 1 }}>
-                            {area.prefisso}{s.lettera}
-                          </span>
-                        </td>
-                        {/* Nome + ultimo chiamato */}
-                        <td style={{ padding: '6px 8px' }}>
-                          <div style={{ fontSize: 13, fontWeight: 600, color: '#1e293b', lineHeight: 1.2 }}>{s.nome}</div>
-                          {last && (
-                            <div style={{ fontSize: 10, color: '#16a34a', fontFamily: 'monospace', marginTop: 1 }}>
-                              ↳ {last.ticketNumero}
-                            </div>
-                          )}
-                        </td>
-                        {/* Coda */}
-                        <td style={{ padding: '6px 4px', textAlign: 'center' }}>
-                          <span style={{ fontSize: 24, fontWeight: 900, color: codaColor, lineHeight: 1 }}>{coda}</span>
-                          <div style={{ fontSize: 9, color: '#94a3b8' }}>attesa</div>
-                        </td>
-                        {/* Chiama */}
-                        <td style={{ padding: '5px 4px' }}>
-                          <button
-                            onClick={() => handleChiama(s)}
-                            disabled={!canCall}
-                            style={{ width: '100%', padding: '6px 0', background: canCall ? '#533483' : '#e2e8f0', color: canCall ? 'white' : '#94a3b8', border: 'none', borderRadius: 4, fontWeight: 700, fontSize: 12, cursor: canCall ? 'pointer' : 'not-allowed' }}
-                          >
-                            {isCalling ? '⏳' : '▶ Chiama'}
-                          </button>
-                        </td>
-                        {/* Richiama */}
-                        <td style={{ padding: '5px 4px' }}>
-                          <button
-                            onClick={() => handleRichiama(s)}
-                            disabled={!canRecall}
-                            title={last ? `Richiama ${last.ticketNumero}` : '—'}
-                            style={{ width: '100%', padding: '6px 2px', background: canRecall ? '#0ea5e9' : '#e2e8f0', color: canRecall ? 'white' : '#94a3b8', border: 'none', borderRadius: 4, fontWeight: 700, fontSize: 11, cursor: canRecall ? 'pointer' : 'not-allowed', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
-                          >
-                            {isRecalling ? '⏳' : `🔁 ${last?.ticketNumero ?? '—'}`}
-                          </button>
-                        </td>
-                        {/* Annulla */}
-                        <td style={{ padding: '5px 4px' }}>
-                          <button
-                            onClick={() => handleAnnulla(s.id)}
-                            disabled={!last}
-                            title="Annulla ultima chiamata"
-                            style={{ width: '100%', padding: '6px 0', background: last ? '#fee2e2' : '#e2e8f0', color: last ? '#ef4444' : '#94a3b8', border: 'none', borderRadius: 4, fontWeight: 700, fontSize: 14, cursor: last ? 'pointer' : 'not-allowed' }}
-                          >
-                            ✕
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+        {/* ── SINISTRA: tabella servizi ── */}
+        <main style={{ flex: 1, overflowY: 'auto', borderRight: altriOperatori.length > 0 ? '2px solid #e2e8f0' : 'none' }}>
+          {loading ? (
+            <p style={{ padding: 24, color: '#888' }}>Caricamento servizi…</p>
+          ) : servizi.length === 0 ? (
+            <p style={{ padding: 24, color: '#888', textAlign: 'center' }}>Nessun servizio attivo assegnato.</p>
+          ) : (
+            areeGruppi.map(({ area, servizi: srv }) => (
+              <div key={area.id}>
+                <div style={{ background: '#1e293b', color: 'white', padding: '4px 14px', fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', borderBottom: '1px solid #334155' }}>
+                  {area.prefisso} — {area.nome}
+                </div>
+                <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+                  <colgroup>
+                    <col style={{ width: 60 }} />
+                    <col />
+                    <col style={{ width: 64 }} />
+                    <col style={{ width: 90 }} />
+                    <col style={{ width: 100 }} />
+                    <col style={{ width: 44 }} />
+                  </colgroup>
+                  <tbody>
+                    {srv.map((s, idx) => {
+                      const coda = getCoda(s.id);
+                      const last = lastCalls.get(s.id);
+                      const isCalling = calling === s.id;
+                      const isRecalling = recalling === s.id;
+                      const canCall = !isPausa && !isCalling && coda > 0;
+                      const canRecall = !isPausa && !isRecalling && !!last;
+                      const codaColor = coda === 0 ? '#64748b' : coda < 5 ? '#d97706' : '#dc2626';
+                      return (
+                        <tr key={s.id} style={{ background: idx % 2 === 0 ? 'white' : '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+                          <td style={{ padding: '6px 8px', textAlign: 'center' }}>
+                            <span style={{ fontWeight: 900, fontSize: 17, color: '#1e293b', letterSpacing: 1 }}>{area.prefisso}{s.lettera}</span>
+                          </td>
+                          <td style={{ padding: '6px 8px' }}>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: '#1e293b', lineHeight: 1.2 }}>{s.nome}</div>
+                            {last && <div style={{ fontSize: 10, color: '#16a34a', fontFamily: 'monospace', marginTop: 1 }}>↳ {last.ticketNumero}</div>}
+                          </td>
+                          <td style={{ padding: '6px 4px', textAlign: 'center' }}>
+                            <span style={{ fontSize: 24, fontWeight: 900, color: codaColor, lineHeight: 1 }}>{coda}</span>
+                            <div style={{ fontSize: 9, color: '#94a3b8' }}>attesa</div>
+                            {s._count.chiamate > 0 && (
+                              <div style={{ fontSize: 9, color: '#60a5fa', marginTop: 1 }}>{s._count.chiamate} oggi</div>
+                            )}
+                          </td>
+                          <td style={{ padding: '5px 4px' }}>
+                            <button onClick={() => handleChiama(s)} disabled={!canCall}
+                              style={{ width: '100%', padding: '6px 0', background: canCall ? '#533483' : '#e2e8f0', color: canCall ? 'white' : '#94a3b8', border: 'none', borderRadius: 4, fontWeight: 700, fontSize: 12, cursor: canCall ? 'pointer' : 'not-allowed' }}>
+                              {isCalling ? '⏳' : '▶ Chiama'}
+                            </button>
+                          </td>
+                          <td style={{ padding: '5px 4px' }}>
+                            <button onClick={() => handleRichiama(s)} disabled={!canRecall}
+                              title={last ? `Richiama ${last.ticketNumero}` : '—'}
+                              style={{ width: '100%', padding: '6px 2px', background: canRecall ? '#0ea5e9' : '#e2e8f0', color: canRecall ? 'white' : '#94a3b8', border: 'none', borderRadius: 4, fontWeight: 700, fontSize: 11, cursor: canRecall ? 'pointer' : 'not-allowed', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {isRecalling ? '⏳' : `🔁 ${last?.ticketNumero ?? '—'}`}
+                            </button>
+                          </td>
+                          <td style={{ padding: '5px 4px' }}>
+                            <button onClick={() => handleAnnulla(s.id)} disabled={!last}
+                              title="Annulla ultima chiamata"
+                              style={{ width: '100%', padding: '6px 0', background: last ? '#fee2e2' : '#e2e8f0', color: last ? '#ef4444' : '#94a3b8', border: 'none', borderRadius: 4, fontWeight: 700, fontSize: 14, cursor: last ? 'pointer' : 'not-allowed' }}>
+                              ✕
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ))
+          )}
+        </main>
+
+        {/* ── DESTRA: pannello colleghi ── */}
+        {altriOperatori.length > 0 && (
+          <aside style={{ width: 200, flexShrink: 0, background: '#1e293b', overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ padding: '8px 12px', background: '#0f172a', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: 1, textTransform: 'uppercase', borderBottom: '1px solid #334155' }}>
+              👥 Colleghi ({altriOperatori.length})
             </div>
-          ))
+            {altriOperatori.map((op) => {
+              if (!op || op.id == null) return null;
+              const pausaSecs = op.stato === 'PAUSA' && op.pausaInizio
+                ? Math.floor((now - new Date(op.pausaInizio).getTime()) / 1000)
+                : null;
+              const pausaStr = pausaSecs != null && pausaSecs >= 0
+                ? `${Math.floor(pausaSecs / 60)}:${(pausaSecs % 60).toString().padStart(2, '0')}` : null;
+              const isAttivo = op.stato === 'ATTIVO';
+              return (
+                <div key={op.id} style={{ padding: '8px 12px', borderBottom: '1px solid #334155', display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: isAttivo ? '#22c55e' : '#f59e0b', display: 'inline-block', flexShrink: 0, marginTop: 4, boxShadow: isAttivo ? '0 0 6px #22c55e' : '0 0 6px #f59e0b' }} />
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: 'white', lineHeight: 1.2 }}>{op.cognome} {op.nome}</div>
+                    <div style={{ fontSize: 11, color: isAttivo ? '#4ade80' : '#fbbf24', marginTop: 2 }}>
+                      {isAttivo ? 'Attivo' : '⏸ Pausa'}
+                      {op.postazione && <span style={{ color: '#94a3b8', marginLeft: 4 }}>— {op.postazione}</span>}
+                    </div>
+                    {pausaStr && <div style={{ fontSize: 10, fontFamily: 'monospace', color: '#fde68a', marginTop: 1 }}>{pausaStr}</div>}
+                  </div>
+                </div>
+              );
+            })}
+          </aside>
         )}
-      </main>
-
-      {/* Barra colleghi in fondo */}
-      {altriOperatori.length > 0 && (
-        <div style={{ background: '#1e293b', borderTop: '2px solid #334155', padding: '5px 16px', display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', flexShrink: 0 }}>
-          <span style={{ fontSize: 10, color: '#64748b', fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', marginRight: 4 }}>Colleghi:</span>
-          {altriOperatori.map((op) => {
-            if (!op || op.id == null) return null;
-            const pausaSecs = op.stato === 'PAUSA' && op.pausaInizio
-              ? Math.floor((now - new Date(op.pausaInizio).getTime()) / 1000)
-              : null;
-            const pausaStr = pausaSecs != null && pausaSecs >= 0
-              ? `${Math.floor(pausaSecs / 60)}:${(pausaSecs % 60).toString().padStart(2, '0')}`
-              : null;
-            return (
-              <div key={op.id} style={{
-                display: 'flex', alignItems: 'center', gap: 4,
-                background: op.stato === 'ATTIVO' ? 'rgba(34,197,94,0.12)' : 'rgba(245,158,11,0.12)',
-                border: `1px solid ${op.stato === 'ATTIVO' ? 'rgba(34,197,94,0.25)' : 'rgba(245,158,11,0.25)'}`,
-                borderRadius: 3, padding: '2px 7px',
-              }}>
-                <span style={{ width: 6, height: 6, borderRadius: '50%', background: op.stato === 'ATTIVO' ? '#22c55e' : '#f59e0b', display: 'inline-block', flexShrink: 0 }} />
-                <span style={{ fontSize: 11, color: 'white', fontWeight: 600 }}>
-                  {op.cognome} {op.nome}{op.postazione ? ` — ${op.postazione}` : ''}
-                  {pausaStr && <span style={{ fontFamily: 'monospace', fontSize: 10, color: '#fde68a', marginLeft: 4 }}>⏸ {pausaStr}</span>}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      )}
+      </div>
 
       {showSettings && <AccountSettings onClose={() => setShowSettings(false)} />}
     </div>

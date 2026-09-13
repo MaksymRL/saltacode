@@ -85,31 +85,34 @@ export default function AccountSettings({ onClose }: { onClose: () => void }) {
 
         <div style={S.body}>
 
-          {/* ── Profilo ── */}
-          <section>
-            <h3 style={S.sectionTitle}>Modifica profilo</h3>
-            <form onSubmit={handleProfile} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div style={{ display: 'flex', gap: 10 }}>
-                <div style={{ flex: 1 }}>
-                  <label style={S.label}>Cognome</label>
-                  <input type="text" value={cognome} onChange={(e) => setCognome(e.target.value)}
-                    placeholder="Nuovo cognome" style={S.input} />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <label style={S.label}>Nome</label>
-                  <input type="text" value={nome} onChange={(e) => setNome(e.target.value)}
-                    placeholder="Nuovo nome" style={S.input} />
-                </div>
-              </div>
-              <span style={S.hint}>Lo username verrà aggiornato automaticamente (es. mrossi → anomi)</span>
-              {profileMsg && <div style={msgStyle(profileMsg.type)}>{profileMsg.text}</div>}
-              <button type="submit" disabled={profileLoading} style={S.btn(profileLoading)}>
-                {profileLoading ? 'Salvataggio…' : 'Aggiorna profilo'}
-              </button>
-            </form>
-          </section>
-
-          <div style={S.divider} />
+          {/* ── Profilo — solo ADMIN e SUPERADMIN ── */}
+          {user?.ruolo !== 'ACCOGLIENZA' && user?.ruolo !== 'OPERATORE' && (
+            <>
+              <section>
+                <h3 style={S.sectionTitle}>Modifica profilo</h3>
+                <form onSubmit={handleProfile} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div style={{ display: 'flex', gap: 10 }}>
+                    <div style={{ flex: 1 }}>
+                      <label style={S.label}>Cognome</label>
+                      <input type="text" value={cognome} onChange={(e) => setCognome(e.target.value)}
+                        placeholder="Nuovo cognome" style={S.input} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <label style={S.label}>Nome</label>
+                      <input type="text" value={nome} onChange={(e) => setNome(e.target.value)}
+                        placeholder="Nuovo nome" style={S.input} />
+                    </div>
+                  </div>
+                  <span style={S.hint}>Lo username verrà aggiornato automaticamente (es. mrossi → anomi)</span>
+                  {profileMsg && <div style={msgStyle(profileMsg.type)}>{profileMsg.text}</div>}
+                  <button type="submit" disabled={profileLoading} style={S.btn(profileLoading)}>
+                    {profileLoading ? 'Salvataggio…' : 'Aggiorna profilo'}
+                  </button>
+                </form>
+              </section>
+              <div style={S.divider} />
+            </>
+          )}
 
           {/* ── Password ── */}
           <section>
@@ -131,10 +134,10 @@ export default function AccountSettings({ onClose }: { onClose: () => void }) {
                 <input type="password" value={confirmPwd} onChange={(e) => setConfirmPwd(e.target.value)}
                   required style={S.input} autoComplete="new-password" />
               </div>
-              {pwdMsg && <div style={msgStyle(pwdMsg.type)}>{pwdMsg.text}</div>}
               <button type="submit" disabled={pwdLoading} style={S.btn(pwdLoading)}>
                 {pwdLoading ? 'Salvataggio…' : 'Cambia password'}
               </button>
+              {pwdMsg && <div style={msgStyle(pwdMsg.type)}>{pwdMsg.text}</div>}
             </form>
           </section>
 

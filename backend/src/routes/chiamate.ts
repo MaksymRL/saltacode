@@ -9,6 +9,36 @@ const router = Router();
 router.use(authenticate);
 
 /**
+ * POST /api/chiamate/postazione
+ * Registra la postazione dell'operatore. Verifica che non sia già in uso.
+ * Da chiamare quando l'operatore seleziona la postazione.
+ */
+router.post('/postazione', authorize('OPERATORE', 'ADMIN', 'SUPERADMIN'), async (req: Request, res: Response) => {
+  const { postazione } = req.body as { postazione?: string };
+  if (!postazione) {
+    res.status(400).json({ error: 'Postazione obbligatoria.' });
+    return;
+  }
+  const posStr = String(postazione).toUpperCase().trim();
+  if (!/^\d{1,2}[A-Z]?$/.test(posStr)) {
+    res.status(400).json({ error: 'Formato postazione non valido.' });
+    return;
+  }
+
+  const { aree, sub: utenteId } = req.user!;
+  // Controlla per ogni area dell'operatore
+  for (const areaId of aree) {
+    const ok = wsService.registraPostazione(areaId, posStr, utenteId);
+    if (!ok) {
+      res.status(409).json({ error: `Postazione ${posStr} già occupata da un altro operatore.` });
+      return;
+    }
+  }
+
+  res.json({ postazione: posStr, message: 'Postazione registrata.' });
+});
+
+/**
  * POST /api/chiamate
  * Roles: OPERATORE
  * Body: { servizioId: number, postazione: string }

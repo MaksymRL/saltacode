@@ -20,7 +20,7 @@ interface Servizio {
   attivo: boolean;
   areaId: number;
   area: { id: number; nome: string; prefisso: string };
-  _count: { ticket: number };
+  _count: { ticket: number; chiamate: number };
 }
 
 interface Utente {
@@ -374,6 +374,11 @@ export default function AdminDashboard() {
                     <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 8 }}>{s.area.nome}</div>
                     <div style={{ fontSize: 36, fontWeight: 900, color }}>{count}</div>
                     <div style={{ fontSize: 12, color: '#9ca3af' }}>in attesa</div>
+                    {s._count.chiamate > 0 && (
+                      <div style={{ fontSize: 11, color: '#60a5fa', marginTop: 4, fontWeight: 600 }}>
+                        📞 {s._count.chiamate} chiamate oggi
+                      </div>
+                    )}
                   </div>
                 );
               })}

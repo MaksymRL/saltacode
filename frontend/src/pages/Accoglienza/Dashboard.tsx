@@ -23,7 +23,7 @@ interface Servizio {
   attivo: boolean;
   areaId: number;
   area: { id: number; nome: string; prefisso: string };
-  _count: { ticket: number };
+  _count: { ticket: number; chiamate: number };
 }
 
 interface CodaState { servizioId: number; count: number; }
@@ -93,6 +93,8 @@ export default function AccoglienzaDashboard() {
     if (msg.type === 'NUMERO_CHIAMATO') {
       const { servizioId } = msg as unknown as { servizioId: number };
       setCode((prev) => prev.map((c) => c.servizioId === servizioId ? { ...c, count: Math.max(0, c.count - 1) } : c));
+      // Refresh lista operatori dopo ogni chiamata
+      loadOperatori();
     }
     if (msg.type === 'STATO_OPERATORE') {
       const { utenteId, stato, postazione, pausaInizio } = msg as unknown as {
@@ -101,18 +103,21 @@ export default function AccoglienzaDashboard() {
       };
       setOperatori((prev) => {
         const exists = prev.find((op) => op.id === utenteId);
-        if (exists) {
-          return prev
-            .map((op) => op.id === utenteId
-              ? { ...op, stato, postazione: postazione ?? op.postazione, pausaInizio: stato === 'PAUSA' ? (pausaInizio ?? op.pausaInizio) : null }
-              : op
-            )
-            .filter((op) => op && op.id != null);
+        if (!exists) {
+          if (stato !== 'DISABILITATO') {
+            setTimeout(() => loadOperatori(), 0);
+          }
+          return prev.filter((op) => op && op.id != null);
         }
-        return prev.filter((op) => op && op.id != null);
+        return prev
+          .map((op) => op.id === utenteId
+            ? { ...op, stato, postazione: postazione ?? op.postazione, pausaInizio: stato === 'PAUSA' ? (pausaInizio ?? op.pausaInizio) : null }
+            : op
+          )
+          .filter((op) => op && op.id != null);
       });
     }
-  }, []);
+  }, [loadOperatori]);
   useWebSocket({ onMessage: handleWsMessage });
 
   // ── Emetti ticket ─────────────────────────────────────────────────────────
@@ -126,34 +131,40 @@ export default function AccoglienzaDashboard() {
       const { ticket, pdf } = res.data;
       setLastTicket(ticket);
       dismissTimerRef.current = setTimeout(() => setLastTicket(null), 8000);
-      // Stampa PDF — crea un iframe temporaneo, stampa e rimuove immediatamente
+      // Stampa PDF — un solo iframe alla volta, cleanup garantito
       try {
         const bytes = Uint8Array.from(atob(pdf), (c) => c.charCodeAt(0));
-        const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+        const blob = new Blob([bytes], { type: 'application/pdf' });
+        const url = URL.createObjectURL(blob);
+
+        // Rimuovi eventuali iframe di stampa precedenti rimasti
+        document.querySelectorAll('iframe[data-print="true"]').forEach((el) => el.remove());
 
         const iframe = document.createElement('iframe');
-        iframe.style.display = 'none';
-        iframe.style.position = 'fixed';
-        iframe.style.top = '-9999px';
+        iframe.setAttribute('data-print', 'true');
+        iframe.style.cssText = 'display:none;position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;';
         document.body.appendChild(iframe);
+
+        const cleanup = () => {
+          URL.revokeObjectURL(url);
+          if (document.body.contains(iframe)) document.body.removeChild(iframe);
+        };
 
         iframe.onload = () => {
           try {
             iframe.contentWindow?.print();
           } catch {
-            // Fallback: download diretto
+            // Fallback download
             const a = document.createElement('a');
             a.href = url; a.download = `ticket-${ticket.numero}.pdf`;
             a.style.display = 'none'; document.body.appendChild(a);
             a.click(); document.body.removeChild(a);
           }
-          // Rimuovi iframe e revoca URL dopo un breve delay
-          setTimeout(() => {
-            URL.revokeObjectURL(url);
-            if (document.body.contains(iframe)) document.body.removeChild(iframe);
-          }, 2000);
+          // Pulizia dopo 3 secondi (tempo per il dialog di stampa)
+          setTimeout(cleanup, 3000);
         };
 
+        iframe.onerror = cleanup;
         iframe.src = url;
       } catch { setError('Ticket emesso, ma errore durante la stampa.'); }
     } catch (err: any) {
@@ -172,7 +183,7 @@ export default function AccoglienzaDashboard() {
   const areeGruppi = Array.from(areeMap.values());
 
   return (
-    <div style={{ minHeight: '100vh', background: '#f0f4ff', fontFamily: "'Tahoma','Helvetica Neue',sans-serif", display: 'flex', flexDirection: 'column' }}>
+    <div style={{ height: '100vh', background: '#f0f4ff', fontFamily: "'Tahoma','Helvetica Neue',sans-serif", display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
       {/* Header */}
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 16px', background: '#0f3460', color: 'white', height: 48, flexShrink: 0 }}>
@@ -209,106 +220,91 @@ export default function AccoglienzaDashboard() {
         </div>
       )}
 
-      {/* Corpo principale — tabella servizi */}
-      <main style={{ flex: 1, overflowY: 'auto' }}>
-        {loading ? (
-          <p style={{ padding: 24, color: '#888' }}>Caricamento servizi…</p>
-        ) : servizi.length === 0 ? (
-          <div style={{ padding: 40, textAlign: 'center', color: '#888' }}>
-            <p style={{ fontSize: 18 }}>Nessun servizio attivo.</p>
-          </div>
-        ) : (
-          areeGruppi.map(({ area, servizi: srv }) => (
-            <div key={area.id}>
-              {/* Intestazione area */}
-              <div style={{
-                background: '#0f3460', color: 'white',
-                padding: '4px 16px', fontSize: 12, fontWeight: 700,
-                letterSpacing: 2, textTransform: 'uppercase',
-                borderBottom: '1px solid #1e4080',
-              }}>
-                {area.prefisso} — {area.nome}
-              </div>
+      {/* Corpo principale — due colonne */}
+      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
 
-              {/* Righe servizi */}
-              <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
-                <tbody>
-                  {srv.map((s, idx) => {
-                    const coda = getCoda(s.id);
-                    const isEmitting = emitting === s.id;
-                    const codaColor = coda === 0 ? '#16a34a' : coda < 5 ? '#d97706' : '#dc2626';
-                    return (
-                      <tr key={s.id} style={{ background: idx % 2 === 0 ? 'white' : '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
-                        {/* Codice */}
-                        <td style={{ width: 60, padding: '6px 10px', textAlign: 'center' }}>
-                          <span style={{ fontWeight: 900, fontSize: 18, color: '#0f3460', letterSpacing: 1 }}>
-                            {area.prefisso}{s.lettera}
-                          </span>
-                        </td>
-                        {/* Nome servizio */}
-                        <td style={{ padding: '6px 10px', fontSize: 14, fontWeight: 600, color: '#1e293b' }}>
-                          {s.nome}
-                        </td>
-                        {/* Coda */}
-                        <td style={{ width: 70, padding: '6px 8px', textAlign: 'center' }}>
-                          <span style={{ fontSize: 22, fontWeight: 900, color: codaColor }}>{coda}</span>
-                          <div style={{ fontSize: 9, color: '#94a3b8', lineHeight: 1 }}>in attesa</div>
-                        </td>
-                        {/* Pulsante */}
-                        <td style={{ width: 140, padding: '6px 10px' }}>
-                          <button
-                            onClick={() => handleEmittiTicket(s.id)}
-                            disabled={isEmitting || globalEmitting}
-                            style={{
-                              width: '100%', padding: '7px 0',
-                              background: isEmitting || globalEmitting ? '#94a3b8' : '#0f3460',
-                              color: 'white', border: 'none', borderRadius: 4,
-                              fontWeight: 700, fontSize: 13,
-                              cursor: isEmitting || globalEmitting ? 'not-allowed' : 'pointer',
-                            }}
-                          >
-                            {isEmitting ? '⏳' : '🖨️ Stampa'}
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+        {/* ── SINISTRA: tabella servizi ── */}
+        <main style={{ flex: 1, overflowY: 'auto', borderRight: '2px solid #e2e8f0' }}>
+          {loading ? (
+            <p style={{ padding: 24, color: '#888' }}>Caricamento servizi…</p>
+          ) : servizi.length === 0 ? (
+            <div style={{ padding: 40, textAlign: 'center', color: '#888' }}>
+              <p style={{ fontSize: 18 }}>Nessun servizio attivo.</p>
             </div>
-          ))
-        )}
-      </main>
-
-      {/* Pannello operatori — barra in fondo */}
-      {operatori.length > 0 && (
-        <div style={{ background: '#1e293b', borderTop: '2px solid #334155', padding: '6px 16px', display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', flexShrink: 0 }}>
-          <span style={{ fontSize: 11, color: '#64748b', fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', marginRight: 4 }}>Operatori:</span>
-          {operatori.map((op) => {
-            if (!op || op.id == null) return null;
-            const pausaSecs = op.stato === 'PAUSA' && op.pausaInizio
-              ? Math.floor((now - new Date(op.pausaInizio).getTime()) / 1000)
-              : null;
-            const pausaStr = pausaSecs != null && pausaSecs >= 0
-              ? `${Math.floor(pausaSecs / 60)}:${(pausaSecs % 60).toString().padStart(2, '0')}`
-              : null;
-            return (
-              <div key={op.id} style={{
-                display: 'flex', alignItems: 'center', gap: 5,
-                background: op.stato === 'ATTIVO' ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)',
-                border: `1px solid ${op.stato === 'ATTIVO' ? 'rgba(34,197,94,0.3)' : 'rgba(245,158,11,0.3)'}`,
-                borderRadius: 4, padding: '2px 8px',
-              }}>
-                <span style={{ width: 7, height: 7, borderRadius: '50%', background: op.stato === 'ATTIVO' ? '#22c55e' : '#f59e0b', display: 'inline-block', flexShrink: 0 }} />
-                <span style={{ fontSize: 12, color: 'white', fontWeight: 600 }}>
-                  {op.cognome} {op.nome}{op.postazione ? ` — ${op.postazione}` : ''}
-                  {pausaStr && <span style={{ fontFamily: 'monospace', fontSize: 10, color: '#fde68a', marginLeft: 4 }}>⏸ {pausaStr}</span>}
-                </span>
+          ) : (
+            areeGruppi.map(({ area, servizi: srv }) => (
+              <div key={area.id}>
+                <div style={{ background: '#0f3460', color: 'white', padding: '4px 16px', fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', borderBottom: '1px solid #1e4080' }}>
+                  {area.prefisso} — {area.nome}
+                </div>
+                <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+                  <tbody>
+                    {srv.map((s, idx) => {
+                      const coda = getCoda(s.id);
+                      const isEmitting = emitting === s.id;
+                      const codaColor = coda === 0 ? '#16a34a' : coda < 5 ? '#d97706' : '#dc2626';
+                      return (
+                        <tr key={s.id} style={{ background: idx % 2 === 0 ? 'white' : '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+                          <td style={{ width: 60, padding: '6px 10px', textAlign: 'center' }}>
+                            <span style={{ fontWeight: 900, fontSize: 18, color: '#0f3460', letterSpacing: 1 }}>{area.prefisso}{s.lettera}</span>
+                          </td>
+                          <td style={{ padding: '6px 10px', fontSize: 14, fontWeight: 600, color: '#1e293b' }}>{s.nome}</td>
+                          <td style={{ width: 70, padding: '6px 8px', textAlign: 'center' }}>
+                            <span style={{ fontSize: 22, fontWeight: 900, color: codaColor }}>{coda}</span>
+                            <div style={{ fontSize: 9, color: '#94a3b8', lineHeight: 1 }}>in attesa</div>
+                            {s._count.chiamate > 0 && (
+                              <div style={{ fontSize: 9, color: '#60a5fa', lineHeight: 1, marginTop: 1 }}>
+                                {s._count.chiamate} oggi
+                              </div>
+                            )}
+                          </td>
+                          <td style={{ width: 140, padding: '6px 10px' }}>
+                            <button onClick={() => handleEmittiTicket(s.id)} disabled={isEmitting || globalEmitting}
+                              style={{ width: '100%', padding: '7px 0', background: isEmitting || globalEmitting ? '#94a3b8' : '#0f3460', color: 'white', border: 'none', borderRadius: 4, fontWeight: 700, fontSize: 13, cursor: isEmitting || globalEmitting ? 'not-allowed' : 'pointer' }}>
+                              {isEmitting ? '⏳' : '🖨️ Stampa'}
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
-            );
-          })}
-        </div>
-      )}
+            ))
+          )}
+        </main>
+
+        {/* ── DESTRA: pannello operatori ── */}
+        {operatori.length > 0 && (
+          <aside style={{ width: 220, flexShrink: 0, background: '#1e293b', overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ padding: '8px 12px', background: '#0f172a', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: 1, textTransform: 'uppercase', borderBottom: '1px solid #334155' }}>
+              👥 Operatori ({operatori.length})
+            </div>
+            {operatori.map((op) => {
+              if (!op || op.id == null) return null;
+              const pausaSecs = op.stato === 'PAUSA' && op.pausaInizio
+                ? Math.floor((now - new Date(op.pausaInizio).getTime()) / 1000)
+                : null;
+              const pausaStr = pausaSecs != null && pausaSecs >= 0
+                ? `${Math.floor(pausaSecs / 60)}:${(pausaSecs % 60).toString().padStart(2, '0')}` : null;
+              const isAttivo = op.stato === 'ATTIVO';
+              return (
+                <div key={op.id} style={{ padding: '8px 12px', borderBottom: '1px solid #334155', display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: isAttivo ? '#22c55e' : '#f59e0b', display: 'inline-block', flexShrink: 0, marginTop: 4, boxShadow: isAttivo ? '0 0 6px #22c55e' : '0 0 6px #f59e0b' }} />
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: 'white', lineHeight: 1.2 }}>{op.cognome} {op.nome}</div>
+                    <div style={{ fontSize: 11, color: isAttivo ? '#4ade80' : '#fbbf24', marginTop: 2 }}>
+                      {isAttivo ? 'Attivo' : '⏸ Pausa'}
+                      {op.postazione && <span style={{ color: '#94a3b8', marginLeft: 4 }}>— {op.postazione}</span>}
+                    </div>
+                    {pausaStr && <div style={{ fontSize: 10, fontFamily: 'monospace', color: '#fde68a', marginTop: 1 }}>{pausaStr}</div>}
+                  </div>
+                </div>
+              );
+            })}
+          </aside>
+        )}
+      </div>
 
       {showSettings && <AccountSettings onClose={() => setShowSettings(false)} />}
     </div>

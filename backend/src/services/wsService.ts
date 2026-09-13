@@ -34,6 +34,10 @@ const rooms = new Map<number, Set<WebSocket>>();
 // Set separato per il monitor (nessuna area specifica)
 const monitorClients = new Set<WebSocket>();
 
+// Mappa postazione attiva → utenteId (per evitare duplicati)
+// chiave: `${areaId}:${postazione}`, valore: utenteId
+const postazioniAttive = new Map<string, number>();
+
 /** Registra un client in una o più room di area. */
 export function joinRoom(areaId: number, ws: WebSocket): void {
   if (!rooms.has(areaId)) rooms.set(areaId, new Set());
@@ -49,6 +53,24 @@ export function joinMonitor(ws: WebSocket): void {
 export function leaveAll(ws: WebSocket): void {
   rooms.forEach((clients) => clients.delete(ws));
   monitorClients.delete(ws);
+}
+
+/** Registra una postazione attiva per un operatore. Ritorna false se già occupata da un altro. */
+export function registraPostazione(areaId: number, postazione: string, utenteId: number): boolean {
+  const key = `${areaId}:${postazione.toUpperCase()}`;
+  const existing = postazioniAttive.get(key);
+  if (existing !== undefined && existing !== utenteId) {
+    return false; // già occupata da un altro operatore
+  }
+  postazioniAttive.set(key, utenteId);
+  return true;
+}
+
+/** Libera tutte le postazioni occupate da un operatore (al logout). */
+export function liberaPostazioniUtente(utenteId: number): void {
+  for (const [key, id] of postazioniAttive.entries()) {
+    if (id === utenteId) postazioniAttive.delete(key);
+  }
 }
 
 /** Invia un messaggio a tutti i client di una room di area. */

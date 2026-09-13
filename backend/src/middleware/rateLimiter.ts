@@ -44,6 +44,10 @@ export function loginRateLimiter(req: Request, res: Response, next: NextFunction
 export function recordFailedAttempt(username: string): void {
   const now = Date.now();
   const { maxAttempts, windowMinutes, blockMinutes } = config.rateLimiter;
+
+  // Se blockMinutes è 0, non bloccare mai
+  if (blockMinutes === 0) return;
+
   const windowMs = windowMinutes * 60 * 1000;
   const blockMs = blockMinutes * 60 * 1000;
 

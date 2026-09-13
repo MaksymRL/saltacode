@@ -31,9 +31,9 @@ export const config = {
   },
 
   rateLimiter: {
-    maxAttempts: 5,
-    windowMinutes: 5,
-    blockMinutes: 3,
+    maxAttempts: 100,   // praticamente illimitato
+    windowMinutes: 60,
+    blockMinutes: 0,    // nessun blocco temporaneo
   },
 
   ws: {

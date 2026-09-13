@@ -14,7 +14,7 @@ export default function MonitorDisplay() {
   const [voiceEnabled, setVoiceEnabled] = useState(false);
   const [voiceConfigLoaded, setVoiceConfigLoaded] = useState(false);
   const [time, setTime] = useState(new Date());
-  // audioUnlocked: true dopo il primo click utente — sblocca AudioContext e TTS
+  // Audio sbloccato al primo gesto utente sul documento (nessun overlay)
   const [audioUnlocked, setAudioUnlocked] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -24,41 +24,41 @@ export default function MonitorDisplay() {
   const audioCtxRef = useRef<AudioContext | null>(null);
   const femaleVoiceRef = useRef<SpeechSynthesisVoice | null>(null);
 
-  // ── Sblocco audio al click (richiesto dai browser moderni) ───────────────
-  const handleUnlockAudio = useCallback(() => {
-    // Inizializza AudioContext (richiede gesto utente)
-    try {
-      if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
-        audioCtxRef.current = new AudioContext();
-      }
-      audioCtxRef.current.resume();
-    } catch { /* ignora */ }
+  // ── Sblocco audio automatico al primo gesto sul documento ───────────────
+  useEffect(() => {
+    if (audioUnlocked) return;
 
-    // Pre-carica TTS con utterance silenziosa per sbloccare il browser
-    if ('speechSynthesis' in window) {
-      const u = new SpeechSynthesisUtterance('');
-      u.volume = 0;
-      window.speechSynthesis.speak(u);
-    }
-
-    setAudioUnlocked(true);
-
-    // Fai un plim di test dopo lo sblocco
-    setTimeout(() => {
+    const unlock = () => {
       try {
-        const ctx = audioCtxRef.current!;
-        if (ctx.state === 'suspended') ctx.resume();
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain); gain.connect(ctx.destination);
-        osc.type = 'sine'; osc.frequency.value = 880;
-        gain.gain.setValueAtTime(0, ctx.currentTime);
-        gain.gain.linearRampToValueAtTime(0.5, ctx.currentTime + 0.01);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
-        osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.5);
+        if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
+          audioCtxRef.current = new AudioContext();
+        }
+        audioCtxRef.current.resume();
       } catch { /* ignora */ }
-    }, 100);
-  }, []);
+
+      if ('speechSynthesis' in window) {
+        const u = new SpeechSynthesisUtterance('');
+        u.volume = 0;
+        window.speechSynthesis.speak(u);
+      }
+
+      setAudioUnlocked(true);
+      // Rimuovi i listener dopo il primo gesto
+      document.removeEventListener('click', unlock);
+      document.removeEventListener('keydown', unlock);
+      document.removeEventListener('touchstart', unlock);
+    };
+
+    document.addEventListener('click', unlock);
+    document.addEventListener('keydown', unlock);
+    document.addEventListener('touchstart', unlock);
+
+    return () => {
+      document.removeEventListener('click', unlock);
+      document.removeEventListener('keydown', unlock);
+      document.removeEventListener('touchstart', unlock);
+    };
+  }, [audioUnlocked]);
 
   // ── Orologio ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -246,34 +246,6 @@ export default function MonitorDisplay() {
   return (
     <div style={S.root}>
 
-      {/* ── OVERLAY SBLOCCO AUDIO (finché non cliccato) ── */}
-      {!audioUnlocked && (
-        <div style={{
-          position: 'fixed', inset: 0, zIndex: 999,
-          background: 'rgba(10,10,20,0.92)',
-          display: 'flex', flexDirection: 'column',
-          alignItems: 'center', justifyContent: 'center', gap: 24,
-          cursor: 'pointer',
-        }} onClick={handleUnlockAudio}>
-          <div style={{ fontSize: 64 }}>🔊</div>
-          <div style={{ fontSize: 28, fontWeight: 900, color: 'white', letterSpacing: 2 }}>
-            Tocca per attivare l'audio
-          </div>
-          <div style={{ fontSize: 14, color: '#94a3b8', textAlign: 'center', maxWidth: 400 }}>
-            Il browser richiede un'interazione per abilitare l'audio.<br/>
-            Clicca qui una volta, poi il monitor funzionerà automaticamente.
-          </div>
-          <button style={{
-            background: '#e74c3c', color: 'white', border: 'none',
-            borderRadius: 12, padding: '16px 48px',
-            fontSize: 18, fontWeight: 700, cursor: 'pointer',
-            boxShadow: '0 0 30px rgba(231,76,60,0.5)',
-          }}>
-            Attiva Audio
-          </button>
-        </div>
-      )}
-
       {/* ── HEADER ── */}
       <div style={S.header}>
         <div style={S.headerLogo}>
@@ -368,25 +340,18 @@ export default function MonitorDisplay() {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          {!audioUnlocked ? (
-            <button onClick={handleUnlockAudio} style={{
-              background: '#e74c3c', color: 'white', border: 'none',
-              borderRadius: 6, padding: '4px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer',
-            }}>🔊 Attiva Audio</button>
-          ) : (
-            <>
-              <span style={{ fontSize: 11, color: '#2ecc71' }}>🔔 Plim attivo</span>
-              {voiceConfigLoaded && (
-                <span style={{
-                  fontSize: 11, padding: '2px 8px', borderRadius: 4,
-                  background: voiceEnabled ? 'rgba(39,174,96,0.15)' : 'rgba(100,100,100,0.15)',
-                  border: `1px solid ${voiceEnabled ? 'rgba(39,174,96,0.3)' : 'rgba(100,100,100,0.2)'}`,
-                  color: voiceEnabled ? '#2ecc71' : '#555',
-                }}>
-                  {voiceEnabled ? '🔊 Voce ON' : '🔇 Voce OFF'}
-                </span>
-              )}
-            </>
+          <span style={{ fontSize: 11, color: audioUnlocked ? '#2ecc71' : '#666' }}>
+            {audioUnlocked ? '🔔 Audio attivo' : '🔇 Audio in attesa…'}
+          </span>
+          {voiceConfigLoaded && audioUnlocked && (
+            <span style={{
+              fontSize: 11, padding: '2px 8px', borderRadius: 4,
+              background: voiceEnabled ? 'rgba(39,174,96,0.15)' : 'rgba(100,100,100,0.15)',
+              border: `1px solid ${voiceEnabled ? 'rgba(39,174,96,0.3)' : 'rgba(100,100,100,0.2)'}`,
+              color: voiceEnabled ? '#2ecc71' : '#555',
+            }}>
+              {voiceEnabled ? '🔊 Voce ON' : '🔇 Voce OFF'}
+            </span>
           )}
           {!ttsSupported && <span style={{ fontSize: 11, color: '#f59e0b' }}>⚠ TTS non supportato</span>}
         </div>
