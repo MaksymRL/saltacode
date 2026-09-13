@@ -59,6 +59,16 @@ router.post('/', authorize('OPERATORE', 'ADMIN', 'SUPERADMIN'), async (req: Requ
       return;
     }
 
+    // Verifica che il servizio appartenga a un'area dell'operatore
+    const servizioCheck = await prisma.servizio.findUnique({
+      where: { id: Number(servizioId) },
+      select: { areaId: true },
+    });
+    if (!servizioCheck || !req.user!.aree.includes(servizioCheck.areaId)) {
+      res.status(403).json({ error: 'Non autorizzato a chiamare per questo servizio.' });
+      return;
+    }
+
     const result = await queueService.callNext(Number(servizioId), posStr, req.user!.sub);
 
     if (!result) {

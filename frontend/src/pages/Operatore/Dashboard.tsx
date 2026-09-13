@@ -134,6 +134,14 @@ export default function OperatoreDashboard() {
       // Refresh lista operatori dopo ogni chiamata
       loadColleghi();
     }
+    if (msg.type === 'CODA_AGGIORNATA') {
+      const { servizioId, count } = msg as unknown as { servizioId: number; count: number };
+      setCode((prev) => {
+        const ex = prev.find((c) => c.servizioId === servizioId);
+        if (ex) return prev.map((c) => c.servizioId === servizioId ? { ...c, count } : c);
+        return [...prev, { servizioId, count }];
+      });
+    }
     if (msg.type === 'STATO_OPERATORE') {
       const { utenteId, stato, postazione: p, pausaInizio } = msg as unknown as {
         utenteId: number; stato: 'ATTIVO' | 'PAUSA' | 'DISABILITATO';

@@ -37,6 +37,18 @@ router.post('/', authorize('ACCOGLIENZA'), async (req: Request, res: Response, n
     }
 
     const operatoreId = req.user!.sub;
+    const userAree = req.user!.aree;
+
+    // Verifica che il servizio appartenga a un'area dell'utente
+    const servizioCheck = await prisma.servizio.findUnique({
+      where: { id: Number(servizioId) },
+      select: { areaId: true },
+    });
+    if (!servizioCheck || !userAree.includes(servizioCheck.areaId)) {
+      res.status(403).json({ error: 'Non autorizzato a emettere ticket per questo servizio.' });
+      return;
+    }
+
     const ticket = await ticketService.emitTicket(Number(servizioId), operatoreId);
 
     // Recupera il nome del servizio per il PDF
@@ -125,15 +137,9 @@ router.delete('/:id', authorize('ACCOGLIENZA', 'ADMIN', 'SUPERADMIN'), async (re
     }
 
     await prisma.$transaction([
+      // Marca come ANNULLATO — NON decrementa il contatore.
+      // Lasciare un buco nella numerazione è corretto e previene duplicati.
       prisma.ticket.update({ where: { id }, data: { stato: 'ANNULLATO' } }),
-      // Decrementa il contatore giornaliero
-      prisma.contatoreGiornaliero.updateMany({
-        where: {
-          servizioId: ticket.servizioId,
-          ultimoNumero: { gt: 0 },
-        },
-        data: { ultimoNumero: { decrement: 1 } },
-      }),
     ]);
 
     // Aggiorna la coda via WebSocket

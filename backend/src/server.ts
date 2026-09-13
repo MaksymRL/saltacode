@@ -61,7 +61,7 @@ main();
  */
 async function resetTicketVecchi(): Promise<void> {
   const oggi = new Date();
-  oggi.setHours(0, 0, 0, 0);
+  oggi.setUTCHours(0, 0, 0, 0);
   const result = await prisma.ticket.updateMany({
     where: { stato: 'ATTESA', emessoPer: { lt: oggi } },
     data: { stato: 'SCADUTO' },

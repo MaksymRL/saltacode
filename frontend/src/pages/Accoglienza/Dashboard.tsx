@@ -93,8 +93,15 @@ export default function AccoglienzaDashboard() {
     if (msg.type === 'NUMERO_CHIAMATO') {
       const { servizioId } = msg as unknown as { servizioId: number };
       setCode((prev) => prev.map((c) => c.servizioId === servizioId ? { ...c, count: Math.max(0, c.count - 1) } : c));
-      // Refresh lista operatori dopo ogni chiamata
       loadOperatori();
+    }
+    if (msg.type === 'CODA_AGGIORNATA') {
+      const { servizioId, count } = msg as unknown as { servizioId: number; count: number };
+      setCode((prev) => {
+        const ex = prev.find((c) => c.servizioId === servizioId);
+        if (ex) return prev.map((c) => c.servizioId === servizioId ? { ...c, count } : c);
+        return [...prev, { servizioId, count }];
+      });
     }
     if (msg.type === 'STATO_OPERATORE') {
       const { utenteId, stato, postazione, pausaInizio } = msg as unknown as {

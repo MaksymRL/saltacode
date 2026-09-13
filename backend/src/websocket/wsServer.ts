@@ -81,10 +81,11 @@ export function attachWebSocketServer(server: Server): void {
       ws.ping();
     }, config.ws.pingIntervalMs);
 
-    // Cleanup alla disconnessione
+    // Cleanup alla disconnessione — libera anche le postazioni
     ws.on('close', () => {
       clearInterval(heartbeat);
       wsService.leaveAll(ws);
+      wsService.liberaPostazioniUtente(payload.sub);
       logger.info(`WS disconnected: user=${payload.username}`);
     });
 
@@ -101,11 +102,11 @@ export function attachWebSocketServer(server: Server): void {
  * - ultimiChiamati: ultimi 10 numeri chiamati (globali per il monitor, per area per gli altri)
  */
 async function sendInitialState(ws: WebSocket, aree: number[], isMonitor: boolean): Promise<void> {
-  // Solo dati di oggi
+  // Inizio giornata coerente con UTC (Prisma @db.Date)
   const oggi = new Date();
-  oggi.setHours(0, 0, 0, 0);
+  oggi.setUTCHours(0, 0, 0, 0);
   const domani = new Date(oggi);
-  domani.setDate(domani.getDate() + 1);
+  domani.setUTCDate(domani.getUTCDate() + 1);
 
   // Ultimi 15 chiamati di oggi con numero ticket reale
   const ultimiChiamati = await prisma.chiamata.findMany({
@@ -121,7 +122,7 @@ async function sendInitialState(ws: WebSocket, aree: number[], isMonitor: boolea
     },
   });
 
-  // Code per area — solo ticket ATTESA di oggi
+  // Code per area — solo ticket ATTESA di oggi (esclude vecchi cancelCall con epoch 0)
   const codeRaw = await prisma.ticket.groupBy({
     by: ['servizioId'],
     where: {

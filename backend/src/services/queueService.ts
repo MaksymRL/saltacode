@@ -26,6 +26,19 @@ export async function callNext(
 
     const ticket = tickets[0]!;
 
+    // Il ticket precedente CHIAMATO da questo operatore diventa SERVITO
+    const ultimaChiamata = await tx.chiamata.findFirst({
+      where: { utenteId, servizioId },
+      orderBy: { timestamp: 'desc' },
+      include: { ticket: { select: { id: true, stato: true } } },
+    });
+    if (ultimaChiamata?.ticket && ultimaChiamata.ticket.stato === 'CHIAMATO') {
+      await tx.ticket.update({
+        where: { id: ultimaChiamata.ticket.id },
+        data: { stato: 'SERVITO' },
+      });
+    }
+
     await tx.ticket.update({
       where: { id: ticket.id },
       data: { stato: 'CHIAMATO' },
@@ -52,6 +65,7 @@ export async function callNext(
     broadcastAll(servizio.areaId, {
       type: 'NUMERO_CHIAMATO',
       ticket: ticket.numero,
+      servizioId,           // aggiunto: permette ai client di aggiornare la coda esatta
       postazione,
       servizio: servizio.nome,
       timestamp: new Date().toISOString(),
@@ -86,15 +100,29 @@ export async function cancelCall(chiamataId: number, utenteId: number): Promise<
     throw new Error('Non autorizzato.');
   }
 
-  await prisma.$transaction([
-    prisma.chiamata.delete({ where: { id: chiamataId } }),
-    ...(chiamata.ticketId
-      ? [prisma.ticket.update({ 
-          where: { id: chiamata.ticketId }, 
-          data: { stato: 'ATTESA', emessoPer: new Date(0) } 
-        })]
-      : []),
-  ]);
+  await prisma.$transaction(async (tx) => {
+    await tx.chiamata.delete({ where: { id: chiamataId } });
+
+    if (chiamata.ticketId) {
+      // Recupera il ticket originale per mantenere emessoPer originale.
+      // Per metterlo in testa usiamo un timestamp di oggi meno 1s — valido
+      // come "oggi" per il filtro INITIAL_STATE ma prima degli altri ticket.
+      const ticketOriginale = await tx.ticket.findUnique({
+        where: { id: chiamata.ticketId },
+        select: { emessoPer: true },
+      });
+      // Se emessoPer originale è di oggi, lo conserva; altrimenti usa ora-1s
+      const oggi = new Date(); oggi.setUTCHours(0, 0, 0, 0);
+      const emessoPer = ticketOriginale?.emessoPer && ticketOriginale.emessoPer >= oggi
+        ? new Date(ticketOriginale.emessoPer.getTime() - 1) // 1ms prima per priorità FIFO
+        : new Date(Date.now() - 1000); // fallback: ora meno 1s
+
+      await tx.ticket.update({
+        where: { id: chiamata.ticketId },
+        data: { stato: 'ATTESA', emessoPer },
+      });
+    }
+  });
 
   // Broadcast WebSocket per l'aggiornamento della coda dopo l'annullamento
   if (chiamata.ticketId) {
