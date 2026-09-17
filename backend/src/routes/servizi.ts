@@ -29,14 +29,34 @@ router.get('/', authorize('SUPERADMIN', 'ADMIN', 'ACCOGLIENZA', 'OPERATORE'), as
         _count: {
           select: {
             ticket: { where: { stato: 'ATTESA' } },
-            chiamate: { where: { timestamp: { gte: oggi, lt: domani } } },
           },
         },
       },
       orderBy: [{ area: { nome: 'asc' } }, { nome: 'asc' }],
     });
 
-    res.json(servizi);
+    // Conta i ticket distinti chiamati oggi per servizio
+    // (usa ticket con stato CHIAMATO/SERVITO — il richiamo NON crea un nuovo ticket)
+    const ticketChiamatiOggi = await prisma.ticket.groupBy({
+      by: ['servizioId'],
+      where: {
+        stato: { in: ['CHIAMATO', 'SERVITO'] },
+        emessoPer: { gte: oggi, lt: domani },
+        ...(isSuperAdmin ? {} : { servizio: { areaId: { in: user.aree } } }),
+      },
+      _count: { _all: true },
+    });
+    const chiamateMap = new Map(ticketChiamatiOggi.map((t) => [t.servizioId, t._count._all]));
+
+    const serviziConChiamate = servizi.map((s) => ({
+      ...s,
+      _count: {
+        ...s._count,
+        chiamate: chiamateMap.get(s.id) ?? 0,
+      },
+    }));
+
+    res.json(serviziConChiamate);
   } catch (err) {
     next(err);
   }

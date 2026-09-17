@@ -10,6 +10,15 @@ import apiClient from '../api/client';
 export default function AccountSettings({ onClose }: { onClose: () => void }) {
   const { user, login, token } = useAuth();
 
+  // Ruoli disponibili per questo utente (salvati al login)
+  const ruoliDisponibili: string[] = (() => {
+    try { return JSON.parse(localStorage.getItem('saltacode_ruoli') ?? '[]'); }
+    catch { return [user?.ruolo ?? '']; }
+  })();
+
+  // La sezione profilo (nome/cognome) è visibile se l'utente ha almeno ADMIN o SUPERADMIN
+  const canEditProfile = ruoliDisponibili.some((r) => ['ADMIN', 'SUPERADMIN'].includes(r));
+
   // ── Dati profilo ────────────────────────────────────────────────
   const [nome, setNome] = useState('');
   const [cognome, setCognome] = useState('');
@@ -85,8 +94,8 @@ export default function AccountSettings({ onClose }: { onClose: () => void }) {
 
         <div style={S.body}>
 
-          {/* ── Profilo — solo ADMIN e SUPERADMIN ── */}
-          {user?.ruolo !== 'ACCOGLIENZA' && user?.ruolo !== 'OPERATORE' && (
+          {/* ── Profilo — solo chi ha ADMIN o SUPERADMIN tra i propri ruoli ── */}
+          {canEditProfile && (
             <>
               <section>
                 <h3 style={S.sectionTitle}>Modifica profilo</h3>

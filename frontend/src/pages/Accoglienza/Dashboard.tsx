@@ -138,41 +138,64 @@ export default function AccoglienzaDashboard() {
       const { ticket, pdf } = res.data;
       setLastTicket(ticket);
       dismissTimerRef.current = setTimeout(() => setLastTicket(null), 8000);
-      // Stampa PDF — un solo iframe alla volta, cleanup garantito
+      // Stampa PDF — strategia multi-browser:
+      // 1. Prova window.open con popup (funziona su Edge, Chrome, Firefox)
+      // 2. Fallback: iframe nascosto
+      // 3. Ultimo fallback: download diretto
       try {
         const bytes = Uint8Array.from(atob(pdf), (c) => c.charCodeAt(0));
         const blob = new Blob([bytes], { type: 'application/pdf' });
         const url = URL.createObjectURL(blob);
 
-        // Rimuovi eventuali iframe di stampa precedenti rimasti
+        // Rimuovi iframe di stampa precedenti
         document.querySelectorAll('iframe[data-print="true"]').forEach((el) => el.remove());
 
-        const iframe = document.createElement('iframe');
-        iframe.setAttribute('data-print', 'true');
-        iframe.style.cssText = 'display:none;position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;';
-        document.body.appendChild(iframe);
+        // Metodo 1: window.open (funziona meglio su Edge/Safari)
+        const popup = window.open(url, '_blank', 'width=800,height=600,toolbar=0,menubar=0,scrollbars=0');
 
-        const cleanup = () => {
-          URL.revokeObjectURL(url);
-          if (document.body.contains(iframe)) document.body.removeChild(iframe);
-        };
+        if (popup) {
+          // Aspetta il caricamento completo del PDF poi stampa
+          // Non chiudere automaticamente — l'utente chiude dopo aver stampato
+          let printed = false;
+          const tryPrint = () => {
+            if (printed) return;
+            printed = true;
+            try { popup.focus(); popup.print(); } catch { /* ignora */ }
+            // Revoca l'URL blob dopo 60s (abbastanza tempo per stampare)
+            setTimeout(() => URL.revokeObjectURL(url), 60000);
+          };
 
-        iframe.onload = () => {
-          try {
-            iframe.contentWindow?.print();
-          } catch {
-            // Fallback download
-            const a = document.createElement('a');
-            a.href = url; a.download = `ticket-${ticket.numero}.pdf`;
-            a.style.display = 'none'; document.body.appendChild(a);
-            a.click(); document.body.removeChild(a);
-          }
-          // Pulizia dopo 3 secondi (tempo per il dialog di stampa)
-          setTimeout(cleanup, 3000);
-        };
+          popup.onload = tryPrint;
+          // Fallback: se onload non scatta entro 1.5s (PDF già in cache)
+          setTimeout(() => { if (!printed) tryPrint(); }, 1500);
+        } else {
+          // Popup bloccato — fallback iframe
+          const iframe = document.createElement('iframe');
+          iframe.setAttribute('data-print', 'true');
+          iframe.style.cssText = 'display:none;position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;';
+          document.body.appendChild(iframe);
 
-        iframe.onerror = cleanup;
-        iframe.src = url;
+          const cleanup = () => {
+            URL.revokeObjectURL(url);
+            if (document.body.contains(iframe)) document.body.removeChild(iframe);
+          };
+
+          iframe.onload = () => {
+            try {
+              iframe.contentWindow?.print();
+            } catch {
+              // Fallback finale: download
+              const a = document.createElement('a');
+              a.href = url; a.download = `ticket-${ticket.numero}.pdf`;
+              a.style.display = 'none'; document.body.appendChild(a);
+              a.click(); document.body.removeChild(a);
+            }
+            setTimeout(cleanup, 3000);
+          };
+
+          iframe.onerror = cleanup;
+          iframe.src = url;
+        }
       } catch { setError('Ticket emesso, ma errore durante la stampa.'); }
     } catch (err: any) {
       setError(err?.response?.data?.error ?? 'Errore emissione ticket.');

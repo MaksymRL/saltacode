@@ -27,10 +27,9 @@ router.use(authenticate);
  * 5. Genera il PDF A5 come base64
  * 6. Invia evento WebSocket TICKET_EMESSO a tutti i client dell'area
  */
-router.post('/', authorize('ACCOGLIENZA'), async (req: Request, res: Response, next: NextFunction) => {
+router.post('/', authorize('ACCOGLIENZA', 'ADMIN', 'SUPERADMIN', 'OPERATORE'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { servizioId } = req.body as { servizioId?: number };
-
     if (!servizioId) {
       res.status(400).json({ error: 'Campo obbligatorio mancante.', fields: ['servizioId'] });
       return;
@@ -46,6 +45,18 @@ router.post('/', authorize('ACCOGLIENZA'), async (req: Request, res: Response, n
     });
     if (!servizioCheck || !userAree.includes(servizioCheck.areaId)) {
       res.status(403).json({ error: 'Non autorizzato a emettere ticket per questo servizio.' });
+      return;
+    }
+
+    // Verifica che l'utente abbia ruolo ACCOGLIENZA nel DB (indipendente dal JWT attivo)
+    const utenteCheck = await prisma.utente.findUnique({
+      where: { id: operatoreId },
+      include: { utentiRuoli: { include: { ruolo: true } } },
+    });
+    const hasAccoglienza = utenteCheck?.utentiRuoli.some((ur) => ur.ruolo.nome === 'ACCOGLIENZA');
+    const hasAdmin = utenteCheck?.utentiRuoli.some((ur) => ['ADMIN', 'SUPERADMIN'].includes(ur.ruolo.nome));
+    if (!hasAccoglienza && !hasAdmin) {
+      res.status(403).json({ error: 'Non autorizzato a emettere ticket.' });
       return;
     }
 

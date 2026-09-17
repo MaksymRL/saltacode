@@ -4,6 +4,8 @@ import { authenticate } from '../middleware/auth.js';
 import * as authService from '../services/authService.js';
 import { prisma } from '../prisma/client.js';
 import * as wsService from '../services/wsService.js';
+import { config } from '../config/index.js';
+import jwt from 'jsonwebtoken';
 
 const router = Router();
 
@@ -85,12 +87,41 @@ router.post('/select-role', async (req: Request, res: Response, next: NextFuncti
 router.post('/logout', authenticate, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const utenteId = req.user!.sub;
+
     // Libera le postazioni occupate dall'operatore
     wsService.liberaPostazioniUtente(utenteId);
+
+    // Recupera le aree dell'utente per il broadcast STATO_OPERATORE OFFLINE
+    const utente = await prisma.utente.findUnique({
+      where: { id: utenteId },
+      include: {
+        utentiAree: true,
+        utentiRuoli: { include: { ruolo: true } },
+      },
+    });
+
     await prisma.utente.update({
       where: { id: utenteId },
       data: { stato: 'OFFLINE' },
     });
+
+    // Broadcast STATO_OPERATORE se era un operatore — aggiorna pannello colleghi in real-time
+    if (utente) {
+      const isOperatore = utente.utentiRuoli.some((ur) => ur.ruolo.nome === 'OPERATORE');
+      if (isOperatore) {
+        utente.utentiAree.forEach(({ areaId }) => {
+          wsService.broadcastAll(areaId, {
+            type: 'STATO_OPERATORE',
+            utenteId,
+            username: utente.username,
+            stato: 'DISABILITATO', // usa DISABILITATO come segnale di offline per il frontend
+            postazione: null,
+            pausaInizio: null,
+          });
+        });
+      }
+    }
+
     res.json({ message: 'Logout effettuato.' });
   } catch (err) {
     next(err);
@@ -114,16 +145,14 @@ router.post('/switch-role', authenticate, async (req: Request, res: Response, ne
       return;
     }
 
-    // Ricarica l'utente per avere ruoli aggiornati
-    const utente = await import('../prisma/client.js').then(({ prisma: p }) =>
-      p.utente.findUnique({
-        where: { id: req.user!.sub },
-        include: {
-          utentiAree: true,
-          utentiRuoli: { include: { ruolo: true } },
-        },
-      })
-    );
+    // Usa l'import statico (già importato in cima al file — niente dynamic import)
+    const utente = await prisma.utente.findUnique({
+      where: { id: req.user!.sub },
+      include: {
+        utentiAree: true,
+        utentiRuoli: { include: { ruolo: true } },
+      },
+    });
 
     if (!utente || utente.stato === 'DISABILITATO') {
       res.status(401).json({ error: 'Utente non trovato o disabilitato.' });
@@ -137,13 +166,14 @@ router.post('/switch-role', authenticate, async (req: Request, res: Response, ne
     }
 
     const aree = utente.utentiAree.map((ua) => ua.areaId);
-    const { config: cfg } = await import('../config/index.js');
-    const jwt = await import('jsonwebtoken');
 
-    const token = jwt.default.sign(
+    // Libera le postazioni del ruolo precedente (potrebbe cambiare da OPERATORE ad ADMIN)
+    wsService.liberaPostazioniUtente(utente.id);
+
+    const token = jwt.sign(
       { sub: utente.id, username: utente.username, ruolo, aree },
-      cfg.jwt.secret,
-      { expiresIn: cfg.jwt.expiresIn }
+      config.jwt.secret,
+      { expiresIn: config.jwt.expiresIn }
     );
 
     res.json({

@@ -51,11 +51,15 @@ export function attachWebSocketServer(server: Server): void {
     if (isMonitor) {
       wsService.joinMonitor(ws);
     } else if (isSuperAdmin) {
-      // SuperAdmin vede tutte le aree: recupera dal DB e si iscrive a tutte
-      const tutteLeAree = await prisma.area.findMany({ select: { id: true } });
-      tutteLeAree.forEach((a) => wsService.joinRoom(a.id, ws));
-      // Usa le aree reali per l'initial state
-      payload.aree = tutteLeAree.map((a) => a.id);
+      try {
+        const tutteLeAree = await prisma.area.findMany({ select: { id: true } });
+        tutteLeAree.forEach((a) => wsService.joinRoom(a.id, ws));
+        payload.aree = tutteLeAree.map((a) => a.id);
+      } catch (err) {
+        logger.error('WS SuperAdmin: errore caricamento aree', { error: err });
+        // Continua senza aree — riceverà solo i messaggi globali
+        payload.aree = [];
+      }
     } else {
       payload.aree.forEach((areaId) => wsService.joinRoom(areaId, ws));
     }
@@ -102,11 +106,11 @@ export function attachWebSocketServer(server: Server): void {
  * - ultimiChiamati: ultimi 10 numeri chiamati (globali per il monitor, per area per gli altri)
  */
 async function sendInitialState(ws: WebSocket, aree: number[], isMonitor: boolean): Promise<void> {
-  // Inizio giornata coerente con UTC (Prisma @db.Date)
+  // Inizio giornata: mezzanotte locale — coerente con setHours usato nel resto del sistema
   const oggi = new Date();
-  oggi.setUTCHours(0, 0, 0, 0);
+  oggi.setHours(0, 0, 0, 0);
   const domani = new Date(oggi);
-  domani.setUTCDate(domani.getUTCDate() + 1);
+  domani.setDate(domani.getDate() + 1);
 
   // Ultimi 15 chiamati di oggi con numero ticket reale
   const ultimiChiamati = await prisma.chiamata.findMany({

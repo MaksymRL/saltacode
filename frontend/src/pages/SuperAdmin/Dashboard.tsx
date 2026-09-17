@@ -3,6 +3,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import apiClient from '../../api/client';
 import Logo from '../../components/Logo';
+import { useConfirm } from '../../components/ConfirmDialog';
 
 interface Area {
   id: number;
@@ -41,6 +42,7 @@ const ALL_RUOLI = ['SUPERADMIN', 'ADMIN', 'ACCOGLIENZA', 'OPERATORE'];
 export default function SuperAdminDashboard() {
   const { user, login, logout } = useAuth();
   const [tab, setTab] = useState<Tab>('code');
+  const { confirm, ConfirmDialog } = useConfirm();
 
   // ── Code real-time via WebSocket ──────────────────────────────────────────
   interface CodaState { servizioId: number; nomeServizio: string; count: number; }
@@ -231,6 +233,7 @@ export default function SuperAdminDashboard() {
   // Cambio password utente
   const [changingPassword, setChangingPassword] = useState<{ utenteId: number; username: string } | null>(null);
   const [newPasswordInput, setNewPasswordInput] = useState('');
+  const [pwdError, setPwdError] = useState('');
 
   const loadUtenti = useCallback(async () => {
     setUtentiLoading(true);
@@ -298,7 +301,11 @@ export default function SuperAdminDashboard() {
   };
 
   const handleEliminaUtente = async (u: Utente) => {
-    if (!window.confirm(`Eliminare definitivamente ${u.cognome} ${u.nome} (${u.username})?`)) return;
+    const ok = await confirm(
+      `Eliminare definitivamente ${u.cognome} ${u.nome} (${u.username})?`,
+      { title: 'Elimina utente', confirmLabel: 'Elimina', danger: true }
+    );
+    if (!ok) return;
     setUtentiError('');
     try {
       await apiClient.delete(`/utenti/${u.id}`);
@@ -353,15 +360,17 @@ export default function SuperAdminDashboard() {
 
   const handleChangePassword = async () => {
     if (!changingPassword || !newPasswordInput.trim()) return;
+    setPwdError('');
     setUtentiError('');
     try {
       await apiClient.patch(`/utenti/${changingPassword.utenteId}`, { newPassword: newPasswordInput });
       setChangingPassword(null);
       setNewPasswordInput('');
+      setPwdError('');
       setUtentiSuccess('Password cambiata.');
       loadUtenti();
     } catch (err: any) {
-      setUtentiError(err?.response?.data?.error ?? 'Errore cambio password.');
+      setPwdError(err?.response?.data?.error ?? 'Errore cambio password.');
     }
   };
 
@@ -887,16 +896,21 @@ export default function SuperAdminDashboard() {
                               
                               {/* Password change */}
                               {changingPassword?.utenteId === u.id ? (
-                                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                                  <input
-                                    type="password"
-                                    value={newPasswordInput}
-                                    onChange={(e) => setNewPasswordInput(e.target.value)}
-                                    placeholder="Nuova password..."
-                                    style={{ padding: '2px 6px', fontSize: 11, width: 120 }}
-                                  />
-                                  <button onClick={handleChangePassword} style={btnStyle('#22c55e', 'small')}>OK</button>
-                                  <button onClick={() => { setChangingPassword(null); setNewPasswordInput(''); }} style={btnStyle('#6b7280', 'small')}>✕</button>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                  <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                                    <input
+                                      type="password"
+                                      value={newPasswordInput}
+                                      onChange={(e) => { setNewPasswordInput(e.target.value); setPwdError(''); }}
+                                      placeholder="Nuova password..."
+                                      style={{ padding: '2px 6px', fontSize: 11, width: 140 }}
+                                    />
+                                    <button onClick={handleChangePassword} style={btnStyle('#22c55e', 'small')}>OK</button>
+                                    <button onClick={() => { setChangingPassword(null); setNewPasswordInput(''); setPwdError(''); }} style={btnStyle('#6b7280', 'small')}>✕</button>
+                                  </div>
+                                  {changingPassword?.utenteId === u.id && pwdError && (
+                                    <span style={{ fontSize: 11, color: '#ef4444', maxWidth: 240 }}>{pwdError}</span>
+                                  )}
                                 </div>
                               ) : (
                                 <button
@@ -931,6 +945,7 @@ export default function SuperAdminDashboard() {
           </>
         )}
       </main>
+      <ConfirmDialog />
     </div>
   );
 }

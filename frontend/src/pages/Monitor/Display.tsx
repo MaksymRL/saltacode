@@ -10,7 +10,7 @@ interface ChiamataEntry {
 export default function MonitorDisplay() {
   const [history, setHistory] = useState<ChiamataEntry[]>([]);
   const [connected, setConnected] = useState(false);
-  const [ttsSupported] = useState('speechSynthesis' in window);
+  const [ttsSupported] = useState(true); // server-side TTS — sempre disponibile
   const [voiceEnabled, setVoiceEnabled] = useState(false);
   const [voiceConfigLoaded, setVoiceConfigLoaded] = useState(false);
   const [time, setTime] = useState(new Date());
@@ -21,29 +21,32 @@ export default function MonitorDisplay() {
   const retryCountRef = useRef(0);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const femaleVoiceRef = useRef<SpeechSynthesisVoice | null>(null);
+  // ── Carica file audio DingLing.wav ────────────────────────────────────────
+  const dingAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    const audio = new Audio('/DingLing.wav');
+    audio.preload = 'auto';
+    dingAudioRef.current = audio;
+  }, []);
+
+
 
   // ── Sblocco audio automatico al primo gesto sul documento ───────────────
   useEffect(() => {
     if (audioUnlocked) return;
 
     const unlock = () => {
-      try {
-        if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
-          audioCtxRef.current = new AudioContext();
-        }
-        audioCtxRef.current.resume();
-      } catch { /* ignora */ }
-
-      if ('speechSynthesis' in window) {
-        const u = new SpeechSynthesisUtterance('');
-        u.volume = 0;
-        window.speechSynthesis.speak(u);
+      // Sblocca HTMLAudio con play silenzioso
+      if (dingAudioRef.current) {
+        const orig = dingAudioRef.current.volume;
+        dingAudioRef.current.volume = 0;
+        dingAudioRef.current.play()
+          .then(() => { dingAudioRef.current!.pause(); dingAudioRef.current!.currentTime = 0; dingAudioRef.current!.volume = orig; })
+          .catch(() => {});
       }
 
       setAudioUnlocked(true);
-      // Rimuovi i listener dopo il primo gesto
       document.removeEventListener('click', unlock);
       document.removeEventListener('keydown', unlock);
       document.removeEventListener('touchstart', unlock);
@@ -77,164 +80,138 @@ export default function MonitorDisplay() {
       .catch(() => setVoiceConfigLoaded(true));
   }, []);
 
-  // ── Trova voce femminile italiana ──────────────────────────────────────────
-  useEffect(() => {
-    if (!('speechSynthesis' in window)) return;
-    const findFemale = () => {
-      const voices = window.speechSynthesis.getVoices();
-      if (voices.length === 0) return;
-      // Priorità: voce italiana femminile esplicita, poi italiana, poi prima disponibile
-      const itFemale = voices.find((v) =>
-        v.lang.startsWith('it') && /female|donna|alice|paola|lisa/i.test(v.name)
-      );
-      const itAny = voices.find((v) => v.lang.startsWith('it'));
-      femaleVoiceRef.current = itFemale ?? itAny ?? voices[0] ?? null;
-    };
-    findFemale();
-    window.speechSynthesis.onvoiceschanged = findFemale;
-    return () => { window.speechSynthesis.onvoiceschanged = null; };
-  }, []);
-
-  // ── Plim con AudioContext — più lungo e corposo ────────────────────────────
+  // ── Riproduce DingLing.wav (sempre attivo se audio sbloccato) ────────────
   const playPlim = useCallback(() => {
-    if (!audioUnlocked) return; // non suonare finché il browser non è stato sbloccato
+    if (!audioUnlocked) return;
     try {
-      if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
-        audioCtxRef.current = new AudioContext();
+      if (dingAudioRef.current) {
+        // Ricomincia dal punto iniziale se già in riproduzione
+        dingAudioRef.current.currentTime = 0;
+        dingAudioRef.current.play().catch(() => {
+          // Fallback: crea nuovo elemento audio
+          const a = new Audio('/DingLing.wav');
+          a.play().catch(() => { /* ignora */ });
+        });
       }
-      const ctx = audioCtxRef.current;
-      if (ctx.state === 'suspended') ctx.resume();
-
-      const playTone = (startTime: number, freq: number, dur: number, vol: number = 0.7) => {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain); gain.connect(ctx.destination);
-        osc.type = 'sine'; osc.frequency.value = freq;
-        gain.gain.setValueAtTime(0, startTime);
-        gain.gain.linearRampToValueAtTime(vol, startTime + 0.015);
-        // Sustain poi fade out
-        gain.gain.setValueAtTime(vol, startTime + dur * 0.6);
-        gain.gain.exponentialRampToValueAtTime(0.001, startTime + dur);
-        osc.start(startTime); osc.stop(startTime + dur + 0.05);
-      };
-
-      const now = ctx.currentTime;
-      // Primo plim: La5 (880 Hz) — 0.5s
-      playTone(now, 880, 0.5, 0.7);
-      // Secondo plim: Do6 (1047 Hz) — 0.5s, dopo 0.6s
-      playTone(now + 0.6, 1047, 0.5, 0.7);
-      // Terzo tono più basso per risonanza — opzionale
-      playTone(now + 0.0, 440, 0.5, 0.2); // armonica
-    } catch { /* ignora errori audio */ }
+    } catch { /* ignora */ }
   }, [audioUnlocked]);
 
-  // ── Coda TTS serializzata con voce femminile ───────────────────────────────
+  // ── TTS server-side via espeak-ng ────────────────────────────────────────
+  // Sostituisce Web Speech API — funziona uguale su qualsiasi browser
   const ttsQueueRef = useRef<string[]>([]);
   const ttsSpeakingRef = useRef(false);
 
   const ttsProcessQueue = useCallback(() => {
     if (ttsSpeakingRef.current || ttsQueueRef.current.length === 0) return;
-    if (!('speechSynthesis' in window)) return;
 
-    const text = ttsQueueRef.current.shift()!;
+    const testo = ttsQueueRef.current.shift()!;
     ttsSpeakingRef.current = true;
 
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'it-IT';
-    utterance.rate = 0.82;
-    utterance.volume = 1.0;
-    utterance.pitch = 1.1; // pitch leggermente più alto per voce femminile
-    if (femaleVoiceRef.current) utterance.voice = femaleVoiceRef.current;
+    const url = `/api/monitor/tts?testo=${encodeURIComponent(testo)}&pitch=70&speed=130`;
+    const audio = new Audio(url);
 
-    utterance.onend = () => { ttsSpeakingRef.current = false; setTimeout(ttsProcessQueue, 400); };
-    utterance.onerror = () => { ttsSpeakingRef.current = false; setTimeout(ttsProcessQueue, 400); };
+    audio.onended = () => {
+      ttsSpeakingRef.current = false;
+      setTimeout(ttsProcessQueue, 300);
+    };
+    audio.onerror = () => {
+      ttsSpeakingRef.current = false;
+      setTimeout(ttsProcessQueue, 300);
+    };
 
-    window.speechSynthesis.speak(utterance);
+    audio.play().catch(() => {
+      ttsSpeakingRef.current = false;
+    });
   }, []);
 
   const announce = useCallback((entry: ChiamataEntry) => {
-    // Plim sempre attivo (se audio sbloccato)
+    // DingLing sempre attivo (se audio sbloccato)
     playPlim();
 
-    // Voce: solo se abilitata E audio sbloccato
-    if (voiceEnabled && audioUnlocked && 'speechSynthesis' in window) {
+    // Voce server-side: solo se abilitata dalla config superadmin
+    if (voiceEnabled && audioUnlocked) {
       const numeroSolo = entry.ticket.replace(/[A-Za-z]/g, '');
       const numeroSpaced = numeroSolo.split('').join(' ');
       const text = `Numero ${numeroSpaced}, ${entry.servizio}, postazione ${entry.postazione}`;
       if (ttsQueueRef.current.length < 3) {
-        // Aspetta che il plim finisca (2 toni × 0.6s ≈ 1.3s)
+        // Aspetta la fine del DingLing (1.28s) + buffer
         setTimeout(() => {
           ttsQueueRef.current.push(text);
           ttsProcessQueue();
-        }, 1300);
+        }, 1500);
       }
     }
   }, [voiceEnabled, audioUnlocked, playPlim, ttsProcessQueue]);
 
-  // ── WebSocket ─────────────────────────────────────────────────────────────
-  const connect = useCallback(async () => {
-    if (!mountedRef.current) return;
-    let token: string;
-    try {
-      const res = await fetch('/api/monitor/token');
-      const data = await res.json() as { token: string };
-      token = data.token;
-    } catch {
-      retryTimerRef.current = setTimeout(() => connect(), 5000);
-      return;
-    }
+  // Tieni announce in un ref — così connect non si ricostruisce mai
+  const announceRef = useRef(announce);
+  announceRef.current = announce;
 
-    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const ws = new WebSocket(`${protocol}://${window.location.host}/ws?token=${encodeURIComponent(token)}`);
-    wsRef.current = ws;
-
-    ws.onopen = () => { retryCountRef.current = 0; setConnected(true); };
-
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data as string) as { type: string; [key: string]: unknown };
-        if (msg.type === 'NUMERO_CHIAMATO' || msg.type === 'NUMERO_RICHIAMATO') {
-          const entry: ChiamataEntry = {
-            ticket: msg['ticket'] as string,
-            servizio: msg['servizio'] as string,
-            postazione: String(msg['postazione']),
-            timestamp: msg['timestamp'] as string,
-          };
-          setHistory((prev) => [entry, ...prev].slice(0, 20));
-          announce(entry);
-        }
-        if (msg.type === 'INITIAL_STATE') {
-          const ultimi = (msg['ultimiChiamati'] as ChiamataEntry[] | undefined) ?? [];
-          setHistory(ultimi.map((u) => ({ ...u, postazione: String(u.postazione) })).slice(0, 20));
-        }
-        // Aggiornamento config voce in tempo reale
-        if (msg.type === 'MONITOR_CONFIG') {
-          const { voiceEnabled: ve } = msg as unknown as { voiceEnabled: boolean };
-          setVoiceEnabled(Boolean(ve));
-        }
-      } catch { /* ignora */ }
-    };
-
-    ws.onclose = () => {
-      if (!mountedRef.current) return;
-      setConnected(false);
-      const delay = Math.min(2000 * Math.pow(2, retryCountRef.current), 30_000);
-      retryCountRef.current += 1;
-      retryTimerRef.current = setTimeout(() => connect(), delay);
-    };
-    ws.onerror = () => ws.close();
-  }, [announce]);
-
+  // ── WebSocket — aperto una sola volta, mai riaperto per cambio di callback ──
   useEffect(() => {
     mountedRef.current = true;
+
+    async function connect() {
+      if (!mountedRef.current) return;
+      let token: string;
+      try {
+        const res = await fetch('/api/monitor/token');
+        const data = await res.json() as { token: string };
+        token = data.token;
+      } catch {
+        retryTimerRef.current = setTimeout(connect, 5000);
+        return;
+      }
+
+      const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      const ws = new WebSocket(`${protocol}://${window.location.host}/ws?token=${encodeURIComponent(token)}`);
+      wsRef.current = ws;
+
+      ws.onopen = () => { retryCountRef.current = 0; setConnected(true); };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data as string) as { type: string; [key: string]: unknown };
+          if (msg.type === 'NUMERO_CHIAMATO' || msg.type === 'NUMERO_RICHIAMATO') {
+            const entry: ChiamataEntry = {
+              ticket: msg['ticket'] as string,
+              servizio: msg['servizio'] as string,
+              postazione: String(msg['postazione']),
+              timestamp: msg['timestamp'] as string,
+            };
+            setHistory((prev) => [entry, ...prev].slice(0, 20));
+            announceRef.current(entry); // usa sempre la versione aggiornata
+          }
+          if (msg.type === 'INITIAL_STATE') {
+            const ultimi = (msg['ultimiChiamati'] as ChiamataEntry[] | undefined) ?? [];
+            setHistory(ultimi.map((u) => ({ ...u, postazione: String(u.postazione) })).slice(0, 20));
+          }
+          if (msg.type === 'MONITOR_CONFIG') {
+            const { voiceEnabled: ve } = msg as unknown as { voiceEnabled: boolean };
+            setVoiceEnabled(Boolean(ve));
+          }
+        } catch { /* ignora */ }
+      };
+
+      ws.onclose = () => {
+        if (!mountedRef.current) return;
+        setConnected(false);
+        const delay = Math.min(2000 * Math.pow(2, retryCountRef.current), 30_000);
+        retryCountRef.current += 1;
+        retryTimerRef.current = setTimeout(connect, delay);
+      };
+      ws.onerror = () => ws.close();
+    }
+
     connect();
+
     return () => {
       mountedRef.current = false;
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
       wsRef.current?.close();
-      audioCtxRef.current?.close();
     };
-  }, [connect]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // ← deps vuote: connessione aperta UNA SOLA VOLTA
 
   const current = history[0] ?? null;
   const prev1 = history[1] ?? null;

@@ -4,6 +4,7 @@ import { useWebSocket } from '../../hooks/useWebSocket';
 import apiClient from '../../api/client';
 import AccountSettings from '../AccountSettings';
 import Logo from '../../components/Logo';
+import { useConfirm } from '../../components/ConfirmDialog';
 
 interface Area {
   id: number;
@@ -44,6 +45,7 @@ export default function AdminDashboard() {
   const { user, login, logout } = useAuth();
   const [tab, setTab] = useState<Tab>('code');
   const [showSettings, setShowSettings] = useState(false);
+  const { confirm, ConfirmDialog } = useConfirm();
 
   // ── Switch ruolo ──────────────────────────────────────────────────────────
   const [ruoliDisponibili, setRuoliDisponibili] = useState<string[]>(['ADMIN']);
@@ -144,7 +146,11 @@ export default function AdminDashboard() {
   };
 
   const handleEliminaServizio = async (s: Servizio) => {
-    if (!window.confirm(`Eliminare il servizio "${s.nome}" (${s.area.prefisso}${s.lettera})?\nI ticket in attesa verranno eliminati.`)) return;
+    const ok = await confirm(
+      `Eliminare il servizio "${s.nome}" (${s.area.prefisso}${s.lettera})? I ticket in attesa verranno eliminati.`,
+      { title: 'Elimina servizio', confirmLabel: 'Elimina', danger: true }
+    );
+    if (!ok) return;
     setServiziError('');
     try {
       await apiClient.delete(`/servizi/${s.id}`);
@@ -174,6 +180,7 @@ export default function AdminDashboard() {
   const [editingNome, setEditingNome] = useState<{ utenteId: number; cognome: string; nome: string } | null>(null);
   const [changingPassword, setChangingPassword] = useState<{ utenteId: number; username: string } | null>(null);
   const [newPasswordInput, setNewPasswordInput] = useState('');
+  const [pwdError, setPwdError] = useState('');
 
   const loadUtenti = useCallback(async () => {
     setUtentiLoading(true);
@@ -234,7 +241,11 @@ export default function AdminDashboard() {
   };
 
   const handleEliminaUtente = async (u: Utente) => {
-    if (!window.confirm(`Eliminare definitivamente ${u.cognome} ${u.nome} (${u.username})?`)) return;
+    const ok = await confirm(
+      `Eliminare definitivamente ${u.cognome} ${u.nome} (${u.username})?`,
+      { title: 'Elimina utente', confirmLabel: 'Elimina', danger: true }
+    );
+    if (!ok) return;
     try {
       await apiClient.delete(`/utenti/${u.id}`);
       setUtentiSuccess(`Utente ${u.username} eliminato.`);
@@ -272,10 +283,12 @@ export default function AdminDashboard() {
 
   const handleChangePassword = async () => {
     if (!changingPassword || !newPasswordInput.trim()) return;
+    setPwdError('');
+    setUtentiError('');
     try {
       await apiClient.patch(`/utenti/${changingPassword.utenteId}`, { newPassword: newPasswordInput });
-      setChangingPassword(null); setNewPasswordInput(''); setUtentiSuccess('Password cambiata.');
-    } catch (err: any) { setUtentiError(err?.response?.data?.error ?? 'Errore cambio password.'); }
+      setChangingPassword(null); setNewPasswordInput(''); setPwdError(''); setUtentiSuccess('Password cambiata.');
+    } catch (err: any) { setPwdError(err?.response?.data?.error ?? 'Errore cambio password.'); }
   };
 
   // ── Code real-time via WebSocket ──────────────────────────────────────────
@@ -703,13 +716,18 @@ export default function AdminDashboard() {
 
                                   {/* Password */}
                                   {changingPassword?.utenteId === u.id ? (
-                                    <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                                      <input type="password" value={newPasswordInput}
-                                        onChange={(e) => setNewPasswordInput(e.target.value)}
-                                        placeholder="Nuova pwd…"
-                                        style={{ padding: '3px 6px', fontSize: 12, width: 110, border: '1px solid #d1d5db', borderRadius: 4 }} />
-                                      <button onClick={handleChangePassword} style={btn('#22c55e', 'sm')}>OK</button>
-                                      <button onClick={() => { setChangingPassword(null); setNewPasswordInput(''); }} style={btn('#6b7280', 'sm')}>✕</button>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                                        <input type="password" value={newPasswordInput}
+                                          onChange={(e) => { setNewPasswordInput(e.target.value); setPwdError(''); }}
+                                          placeholder="Nuova pwd…"
+                                          style={{ padding: '3px 6px', fontSize: 12, width: 130, border: '1px solid #d1d5db', borderRadius: 4 }} />
+                                        <button onClick={handleChangePassword} style={btn('#22c55e', 'sm')}>OK</button>
+                                        <button onClick={() => { setChangingPassword(null); setNewPasswordInput(''); setPwdError(''); }} style={btn('#6b7280', 'sm')}>✕</button>
+                                      </div>
+                                      {pwdError && (
+                                        <span style={{ fontSize: 11, color: '#ef4444', maxWidth: 260 }}>{pwdError}</span>
+                                      )}
                                     </div>
                                   ) : (
                                     <button onClick={() => setChangingPassword({ utenteId: u.id, username: u.username })}
@@ -738,6 +756,7 @@ export default function AdminDashboard() {
       </main>
 
       {showSettings && <AccountSettings onClose={() => setShowSettings(false)} />}
+      <ConfirmDialog />
     </div>
   );
 }

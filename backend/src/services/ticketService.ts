@@ -21,8 +21,8 @@ export async function emitTicket(servizioId: number, operatoreId: number): Promi
   emessoPer: Date;
   stato: string;
 }> {
-  return await prisma.$transaction(async (tx) => {
-    // Verifica servizio e area
+  // Esegui la transaction — nessun broadcast dentro
+  const { ticket, areaId, codaCount } = await prisma.$transaction(async (tx) => {
     const servizio = await tx.servizio.findUnique({
       where: { id: servizioId },
       include: { area: true },
@@ -30,22 +30,16 @@ export async function emitTicket(servizioId: number, operatoreId: number): Promi
     if (!servizio || !servizio.attivo) throw new Error('Servizio non disponibile.');
     if (!servizio.area.attiva) throw new Error('Area non attiva.');
 
-    // Calcola inizio giornata in UTC (coerente con Prisma @db.Date)
-    const oggi = utcStartOfDay();
-
-    // --- SERIALIZZAZIONE DEL CONTATORE ---
-    // Upsert prima per garantire che il record esista, poi UPDATE atomico con
-    // SELECT FOR UPDATE per escludere scritture concorrenti.
     await tx.$executeRaw`
       INSERT INTO contatore_giornaliero ("servizioId", data, "ultimoNumero")
-      VALUES (${servizioId}, ${oggi}, 0)
+      VALUES (${servizioId}, CURRENT_DATE, 0)
       ON CONFLICT ("servizioId", data) DO NOTHING
     `;
 
     const rows = await tx.$queryRaw<{ ultimoNumero: number }[]>`
       SELECT "ultimoNumero"
       FROM contatore_giornaliero
-      WHERE "servizioId" = ${servizioId} AND data = ${oggi}
+      WHERE "servizioId" = ${servizioId} AND data = CURRENT_DATE
       FOR UPDATE
     `;
 
@@ -57,7 +51,7 @@ export async function emitTicket(servizioId: number, operatoreId: number): Promi
     await tx.$executeRaw`
       UPDATE contatore_giornaliero
       SET "ultimoNumero" = ${nuovoNumero}
-      WHERE "servizioId" = ${servizioId} AND data = ${oggi}
+      WHERE "servizioId" = ${servizioId} AND data = CURRENT_DATE
     `;
 
     const numero = formatTicketNumber(servizio.area.prefisso, servizio.lettera, nuovoNumero);
@@ -70,12 +64,15 @@ export async function emitTicket(servizioId: number, operatoreId: number): Promi
       where: { servizioId, stato: 'ATTESA' },
     });
 
-    const message = { type: 'TICKET_EMESSO' as const, servizioId, coda: codaCount };
-    broadcast(servizio.areaId, message);
-    broadcastMonitor(message);
-
-    return ticket;
+    return { ticket, areaId: servizio.areaId, codaCount };
   });
+
+  // Broadcast DOPO il commit della transaction — nessun rischio di notifica per ticket rollbackati
+  const message = { type: 'TICKET_EMESSO' as const, servizioId, coda: codaCount };
+  broadcast(areaId, message);
+  broadcastMonitor(message);
+
+  return ticket;
 }
 
 /**

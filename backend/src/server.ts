@@ -56,18 +56,20 @@ async function main() {
 main();
 
 /**
- * Mette in SCADUTO tutti i ticket in ATTESA emessi prima di oggi.
+/**
+ * A fine giornata marca come SERVITO tutti i ticket rimasti in ATTESA o CHIAMATO.
+ * "SERVITO" = la giornata è finita, il ticket è considerato gestito.
  * Viene eseguito all'avvio e a mezzanotte.
  */
 async function resetTicketVecchi(): Promise<void> {
-  const oggi = new Date();
-  oggi.setUTCHours(0, 0, 0, 0);
-  const result = await prisma.ticket.updateMany({
-    where: { stato: 'ATTESA', emessoPer: { lt: oggi } },
-    data: { stato: 'SCADUTO' },
-  });
-  if (result.count > 0) {
-    logger.info(`Reset giornaliero: ${result.count} ticket scaduti.`);
+  const result = await prisma.$executeRaw`
+    UPDATE ticket
+    SET stato = 'SERVITO'
+    WHERE stato IN ('ATTESA', 'CHIAMATO')
+    AND DATE("emessoPer") < CURRENT_DATE
+  `;
+  if ((result as number) > 0) {
+    logger.info(`Reset giornaliero: ${result} ticket chiusi come SERVITO.`);
   }
 }
 

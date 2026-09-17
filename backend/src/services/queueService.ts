@@ -26,15 +26,22 @@ export async function callNext(
 
     const ticket = tickets[0]!;
 
-    // Il ticket precedente CHIAMATO da questo operatore diventa SERVITO
-    const ultimaChiamata = await tx.chiamata.findFirst({
-      where: { utenteId, servizioId },
+    // Marca come SERVITO TUTTI i ticket precedentemente CHIAMATO da questo operatore
+    // (non solo lo stesso servizio — l'operatore potrebbe aver cambiato servizio)
+    const ticketsChiamati = await tx.chiamata.findMany({
+      where: { utenteId },
       orderBy: { timestamp: 'desc' },
+      take: 10, // limita la ricerca alle ultime 10 chiamate
       include: { ticket: { select: { id: true, stato: true } } },
     });
-    if (ultimaChiamata?.ticket && ultimaChiamata.ticket.stato === 'CHIAMATO') {
-      await tx.ticket.update({
-        where: { id: ultimaChiamata.ticket.id },
+
+    const daMarcare = ticketsChiamati
+      .filter((c) => c.ticket?.stato === 'CHIAMATO')
+      .map((c) => c.ticket!.id);
+
+    if (daMarcare.length > 0) {
+      await tx.ticket.updateMany({
+        where: { id: { in: daMarcare } },
         data: { stato: 'SERVITO' },
       });
     }
