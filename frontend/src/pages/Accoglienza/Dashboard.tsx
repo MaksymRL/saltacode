@@ -304,36 +304,50 @@ export default function AccoglienzaDashboard() {
           )}
         </main>
 
-        {/* ── DESTRA: pannello operatori ── */}
-        {operatori.length > 0 && (
-          <aside style={{ width: 220, flexShrink: 0, background: '#1e293b', overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
-            <div style={{ padding: '8px 12px', background: '#0f172a', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: 1, textTransform: 'uppercase', borderBottom: '1px solid #334155' }}>
-              👥 Operatori ({operatori.length})
+        {/* ── DESTRA: pannello operatori — sempre visibile ── */}
+        <aside style={{ width: 220, flexShrink: 0, background: '#1e293b', overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ padding: '8px 12px', background: '#0f172a', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: 1, textTransform: 'uppercase', borderBottom: '1px solid #334155' }}>
+            👥 Operatori ({operatori.filter((op) => op.id !== user?.id).length})
+          </div>
+          {/* Tu stesso (accoglienza) — sempre in cima */}
+          <div style={{ padding: '8px 12px', borderBottom: '1px solid #334155', display: 'flex', alignItems: 'flex-start', gap: 8, background: 'rgba(15,52,96,0.4)' }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#22c55e', display: 'inline-block', flexShrink: 0, marginTop: 4, boxShadow: '0 0 6px #22c55e' }} />
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'white', lineHeight: 1.2 }}>
+                {user?.cognome} {user?.nome} <span style={{ fontSize: 10, color: '#94a3b8' }}>(tu)</span>
+              </div>
+              <div style={{ fontSize: 11, color: '#4ade80', marginTop: 2 }}>● Accoglienza</div>
             </div>
-            {operatori.map((op) => {
-              if (!op || op.id == null) return null;
-              const pausaSecs = op.stato === 'PAUSA' && op.pausaInizio
-                ? Math.floor((now - new Date(op.pausaInizio).getTime()) / 1000)
-                : null;
-              const pausaStr = pausaSecs != null && pausaSecs >= 0
-                ? `${Math.floor(pausaSecs / 60)}:${(pausaSecs % 60).toString().padStart(2, '0')}` : null;
-              const isAttivo = op.stato === 'ATTIVO';
-              return (
-                <div key={op.id} style={{ padding: '8px 12px', borderBottom: '1px solid #334155', display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: isAttivo ? '#22c55e' : '#f59e0b', display: 'inline-block', flexShrink: 0, marginTop: 4, boxShadow: isAttivo ? '0 0 6px #22c55e' : '0 0 6px #f59e0b' }} />
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: 'white', lineHeight: 1.2 }}>{op.cognome} {op.nome}</div>
-                    <div style={{ fontSize: 11, color: isAttivo ? '#4ade80' : '#fbbf24', marginTop: 2 }}>
-                      {isAttivo ? 'Attivo' : '⏸ Pausa'}
-                      {op.postazione && <span style={{ color: '#94a3b8', marginLeft: 4 }}>— {op.postazione}</span>}
-                    </div>
-                    {pausaStr && <div style={{ fontSize: 10, fontFamily: 'monospace', color: '#fde68a', marginTop: 1 }}>{pausaStr}</div>}
+          </div>
+          {/* Operatori — escludi l'utente corrente per evitare duplicati */}
+          {operatori.filter((op) => op.id !== user?.id).map((op) => {
+            if (!op || op.id == null) return null;
+            const pausaSecs = op.stato === 'PAUSA' && op.pausaInizio
+              ? Math.floor((now - new Date(op.pausaInizio).getTime()) / 1000)
+              : null;
+            const pausaStr = pausaSecs != null && pausaSecs >= 0
+              ? `${Math.floor(pausaSecs / 60)}:${(pausaSecs % 60).toString().padStart(2, '0')}` : null;
+            const isAttivo = op.stato === 'ATTIVO';
+            return (
+              <div key={op.id} style={{ padding: '8px 12px', borderBottom: '1px solid #334155', display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: isAttivo ? '#22c55e' : '#f59e0b', display: 'inline-block', flexShrink: 0, marginTop: 4, boxShadow: isAttivo ? '0 0 6px #22c55e' : '0 0 6px #f59e0b' }} />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'white', lineHeight: 1.2 }}>{op.cognome} {op.nome}</div>
+                  <div style={{ fontSize: 11, color: isAttivo ? '#4ade80' : '#fbbf24', marginTop: 2 }}>
+                    {isAttivo ? 'Attivo' : '⏸ Pausa'}
+                    {op.postazione && <span style={{ color: '#94a3b8', marginLeft: 4 }}>— {op.postazione}</span>}
                   </div>
+                  {pausaStr && <div style={{ fontSize: 10, fontFamily: 'monospace', color: '#fde68a', marginTop: 1 }}>{pausaStr}</div>}
                 </div>
-              );
-            })}
-          </aside>
-        )}
+              </div>
+            );
+          })}
+          {operatori.length === 0 && (
+            <div style={{ padding: '12px', fontSize: 11, color: '#475569', textAlign: 'center', fontStyle: 'italic' }}>
+              Nessun operatore online
+            </div>
+          )}
+        </aside>
       </div>
 
       {showSettings && <AccountSettings onClose={() => setShowSettings(false)} />}

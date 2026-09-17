@@ -5,7 +5,9 @@ export type Ruolo = 'SUPERADMIN' | 'ADMIN' | 'ACCOGLIENZA' | 'OPERATORE';
 export interface AuthUser {
   id: number;
   username: string;
-  ruolo: Ruolo;       // ruolo ATTIVO in questa sessione
+  cognome: string;
+  nome: string;
+  ruolo: Ruolo;
   aree: number[];
   mustChangePwd: boolean;
 }

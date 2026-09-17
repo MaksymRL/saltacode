@@ -118,6 +118,8 @@ export async function selectRole(pendingToken: string, ruoloScelto: string): Pro
     user: {
       id: utente.id,
       username: utente.username,
+      cognome: utente.cognome,
+      nome: utente.nome,
       ruolo: ruoloScelto,
       aree,
       mustChangePwd: utente.mustChangePwd,

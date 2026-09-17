@@ -181,6 +181,8 @@ router.post('/switch-role', authenticate, async (req: Request, res: Response, ne
       user: {
         id: utente.id,
         username: utente.username,
+        cognome: utente.cognome,
+        nome: utente.nome,
         ruolo,
         aree,
         mustChangePwd: utente.mustChangePwd,

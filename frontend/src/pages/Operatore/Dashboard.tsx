@@ -320,7 +320,7 @@ export default function OperatoreDashboard() {
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
 
         {/* ── SINISTRA: tabella servizi ── */}
-        <main style={{ flex: 1, overflowY: 'auto', borderRight: altriOperatori.length > 0 ? '2px solid #e2e8f0' : 'none' }}>
+        <main style={{ flex: 1, overflowY: 'auto', borderRight: '2px solid #e2e8f0' }}>
           {loading ? (
             <p style={{ padding: 24, color: '#888' }}>Caricamento servizi…</p>
           ) : servizi.length === 0 ? (
@@ -395,36 +395,53 @@ export default function OperatoreDashboard() {
           )}
         </main>
 
-        {/* ── DESTRA: pannello colleghi ── */}
-        {altriOperatori.length > 0 && (
-          <aside style={{ width: 200, flexShrink: 0, background: '#1e293b', overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
-            <div style={{ padding: '8px 12px', background: '#0f172a', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: 1, textTransform: 'uppercase', borderBottom: '1px solid #334155' }}>
-              👥 Colleghi ({altriOperatori.length})
+        {/* ── DESTRA: pannello colleghi — sempre visibile, include te stesso ── */}
+        <aside style={{ width: 200, flexShrink: 0, background: '#1e293b', overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ padding: '8px 12px', background: '#0f172a', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: 1, textTransform: 'uppercase', borderBottom: '1px solid #334155' }}>
+            👥 Operatori ({altriOperatori.length + 1})
+          </div>
+          {/* Tu stesso — sempre in cima */}
+          <div style={{ padding: '8px 12px', borderBottom: '1px solid #334155', display: 'flex', alignItems: 'flex-start', gap: 8, background: 'rgba(83,52,131,0.2)' }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: isPausa ? '#f59e0b' : '#22c55e', display: 'inline-block', flexShrink: 0, marginTop: 4, boxShadow: isPausa ? '0 0 6px #f59e0b' : '0 0 6px #22c55e' }} />
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'white', lineHeight: 1.2 }}>
+                {user?.cognome} {user?.nome} <span style={{ fontSize: 10, color: '#94a3b8' }}>(tu)</span>
+              </div>
+              <div style={{ fontSize: 11, color: isPausa ? '#fbbf24' : '#4ade80', marginTop: 2 }}>
+                {isPausa ? `⏸ Pausa ${fmt(pausaSecs)}` : '● Attivo'}
+                {postazione && <span style={{ color: '#94a3b8', marginLeft: 4 }}>— {postazione}</span>}
+              </div>
             </div>
-            {altriOperatori.map((op) => {
-              if (!op || op.id == null) return null;
-              const pausaSecs = op.stato === 'PAUSA' && op.pausaInizio
-                ? Math.floor((now - new Date(op.pausaInizio).getTime()) / 1000)
-                : null;
-              const pausaStr = pausaSecs != null && pausaSecs >= 0
-                ? `${Math.floor(pausaSecs / 60)}:${(pausaSecs % 60).toString().padStart(2, '0')}` : null;
-              const isAttivo = op.stato === 'ATTIVO';
-              return (
-                <div key={op.id} style={{ padding: '8px 12px', borderBottom: '1px solid #334155', display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: isAttivo ? '#22c55e' : '#f59e0b', display: 'inline-block', flexShrink: 0, marginTop: 4, boxShadow: isAttivo ? '0 0 6px #22c55e' : '0 0 6px #f59e0b' }} />
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: 'white', lineHeight: 1.2 }}>{op.cognome} {op.nome}</div>
-                    <div style={{ fontSize: 11, color: isAttivo ? '#4ade80' : '#fbbf24', marginTop: 2 }}>
-                      {isAttivo ? 'Attivo' : '⏸ Pausa'}
-                      {op.postazione && <span style={{ color: '#94a3b8', marginLeft: 4 }}>— {op.postazione}</span>}
-                    </div>
-                    {pausaStr && <div style={{ fontSize: 10, fontFamily: 'monospace', color: '#fde68a', marginTop: 1 }}>{pausaStr}</div>}
+          </div>
+          {/* Colleghi */}
+          {altriOperatori.map((op) => {
+            if (!op || op.id == null) return null;
+            const pausaSecs = op.stato === 'PAUSA' && op.pausaInizio
+              ? Math.floor((now - new Date(op.pausaInizio).getTime()) / 1000)
+              : null;
+            const pausaStr = pausaSecs != null && pausaSecs >= 0
+              ? `${Math.floor(pausaSecs / 60)}:${(pausaSecs % 60).toString().padStart(2, '0')}` : null;
+            const isAttivo = op.stato === 'ATTIVO';
+            return (
+              <div key={op.id} style={{ padding: '8px 12px', borderBottom: '1px solid #334155', display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: isAttivo ? '#22c55e' : '#f59e0b', display: 'inline-block', flexShrink: 0, marginTop: 4, boxShadow: isAttivo ? '0 0 6px #22c55e' : '0 0 6px #f59e0b' }} />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'white', lineHeight: 1.2 }}>{op.cognome} {op.nome}</div>
+                  <div style={{ fontSize: 11, color: isAttivo ? '#4ade80' : '#fbbf24', marginTop: 2 }}>
+                    {isAttivo ? 'Attivo' : '⏸ Pausa'}
+                    {op.postazione && <span style={{ color: '#94a3b8', marginLeft: 4 }}>— {op.postazione}</span>}
                   </div>
+                  {pausaStr && <div style={{ fontSize: 10, fontFamily: 'monospace', color: '#fde68a', marginTop: 1 }}>{pausaStr}</div>}
                 </div>
-              );
-            })}
-          </aside>
-        )}
+              </div>
+            );
+          })}
+          {altriOperatori.length === 0 && (
+            <div style={{ padding: '12px', fontSize: 11, color: '#475569', textAlign: 'center', fontStyle: 'italic' }}>
+              Nessun collega online
+            </div>
+          )}
+        </aside>
       </div>
 
       {showSettings && <AccountSettings onClose={() => setShowSettings(false)} />}

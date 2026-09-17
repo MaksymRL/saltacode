@@ -494,45 +494,53 @@ export default function SuperAdminDashboard() {
                 {monitorVoiceLoading ? '…' : monitorVoice ? '🔊 Voce ON' : '🔇 Voce OFF'}
               </button>
             </div>
-            {code.length === 0 ? (
-              <p style={{ color: '#888' }}>Nessun servizio con ticket in attesa.</p>
-            ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 16 }}>
-                {code.map((c) => {
-                  // Trova il servizio per nome area
-                  const servizio = servizi.find((s) => s.id === c.servizioId);
-                  const color = c.count === 0 ? '#94a3b8' : c.count < 5 ? '#f59e0b' : '#ef4444';
-                  return (
-                    <div key={c.servizioId} style={{
-                      ...cardStyle,
-                      borderLeft: `5px solid ${color}`,
-                      marginBottom: 0,
-                    }}>
-                      <div style={{ fontSize: 11, color: '#6b7280', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>
-                        {servizio ? `${servizio.area.prefisso}${servizio.lettera}` : `#${c.servizioId}`}
+            {/* Tabella coda compatta — stessa struttura dell'operatore */}
+            <div style={{ background: 'white', borderRadius: 8, boxShadow: '0 1px 3px rgba(0,0,0,0.1)', overflow: 'hidden' }}>
+              {servizi.filter((s) => s.attivo).length === 0 ? (
+                <p style={{ padding: 20, color: '#888', textAlign: 'center' }}>Nessun servizio attivo.</p>
+              ) : (
+                (() => {
+                  const areeMap = new Map<number, { area: typeof servizi[0]['area']; items: typeof servizi }>();
+                  servizi.filter((s) => s.attivo).forEach((s) => {
+                    if (!areeMap.has(s.areaId)) areeMap.set(s.areaId, { area: s.area, items: [] });
+                    areeMap.get(s.areaId)!.items.push(s);
+                  });
+                  return Array.from(areeMap.values()).map(({ area, items }) => (
+                    <div key={area.id}>
+                      <div style={{ background: '#1a1a2e', color: 'white', padding: '4px 16px', fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase' }}>
+                        {area.prefisso} — {area.nome}
                       </div>
-                      <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8, color: '#1e293b' }}>
-                        {c.nomeServizio || servizio?.nome || '—'}
-                      </div>
-                      {servizio && (
-                        <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 8 }}>
-                          {servizio.area.nome}
-                        </div>
-                      )}
-                      <div style={{ fontSize: 40, fontWeight: 900, color, lineHeight: 1 }}>
-                        {c.count}
-                      </div>
-                      <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>in attesa</div>
-                      {servizio && servizio._count.chiamate > 0 && (
-                        <div style={{ fontSize: 11, color: '#60a5fa', marginTop: 4, fontWeight: 600 }}>
-                          📞 {servizio._count.chiamate} oggi
-                        </div>
-                      )}
+                      <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+                        <tbody>
+                          {items.map((s, idx) => {
+                            const wsCount = code.find((c) => c.servizioId === s.id)?.count ?? 0;
+                            const color = wsCount > 10 ? '#ef4444' : wsCount > 5 ? '#f59e0b' : '#22c55e';
+                            return (
+                              <tr key={s.id} style={{ background: idx % 2 === 0 ? 'white' : '#f8fafc', borderBottom: '1px solid #f0f0f0' }}>
+                                <td style={{ width: 56, padding: '6px 10px', textAlign: 'center' }}>
+                                  <span style={{ fontWeight: 900, fontSize: 16, color: '#1a1a2e', letterSpacing: 1 }}>{area.prefisso}{s.lettera}</span>
+                                </td>
+                                <td style={{ padding: '6px 10px', fontSize: 13, fontWeight: 600, color: '#1e293b' }}>{s.nome}</td>
+                                <td style={{ width: 70, padding: '6px 8px', textAlign: 'center' }}>
+                                  <span style={{ fontSize: 26, fontWeight: 900, color, lineHeight: 1 }}>{wsCount}</span>
+                                  <div style={{ fontSize: 9, color: '#9ca3af' }}>in attesa</div>
+                                </td>
+                                <td style={{ width: 80, padding: '6px 8px', textAlign: 'center' }}>
+                                  {s._count.chiamate > 0 && (
+                                    <><span style={{ fontSize: 18, fontWeight: 700, color: '#3b82f6' }}>{s._count.chiamate}</span>
+                                    <div style={{ fontSize: 9, color: '#9ca3af' }}>oggi</div></>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
                     </div>
-                  );
-                })}
-              </div>
-            )}
+                  ));
+                })()
+              )}
+            </div>
           </>
         )}
 
