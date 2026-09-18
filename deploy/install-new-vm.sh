@@ -190,23 +190,43 @@ else
   GENERATED_PASS=0
 fi
 
-# Password passata come parametro, non concatenata nella query
-if sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'" | grep -q 1; then
-  sudo -u postgres psql -v "pw=$DB_PASS" \
-    -c "ALTER USER \"$DB_USER\" WITH PASSWORD :'pw';" >/dev/null
+# ATTENZIONE: psql NON interpola le variabili (:'pw', :"dbuser") nelle stringhe
+# passate con -c — quelle vengono spedite al server così come sono e danno
+# errore di sintassi. L'interpolazione avviene solo con SQL da stdin o da -f.
+psql_admin() {
+  sudo -u postgres psql -qtAX -v ON_ERROR_STOP=1 \
+    -v dbuser="$DB_USER" -v dbname="$DB_NAME" -v pw="$DB_PASS" "$@"
+}
+
+if [[ "$(psql_admin -c "SELECT 1 FROM pg_roles WHERE rolname = '$DB_USER'")" == "1" ]]; then
+  psql_admin << 'SQL' >/dev/null
+ALTER ROLE :"dbuser" WITH LOGIN PASSWORD :'pw';
+SQL
+  ok "Ruolo '$DB_USER' aggiornato"
 else
-  sudo -u postgres psql -v "pw=$DB_PASS" \
-    -c "CREATE USER \"$DB_USER\" WITH PASSWORD :'pw';" >/dev/null
+  psql_admin << 'SQL' >/dev/null
+CREATE ROLE :"dbuser" WITH LOGIN PASSWORD :'pw';
+SQL
+  ok "Ruolo '$DB_USER' creato"
 fi
 
-if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'" | grep -q 1; then
-  sudo -u postgres psql -c "CREATE DATABASE \"$DB_NAME\" OWNER \"$DB_USER\";" >/dev/null
+if [[ "$(psql_admin -c "SELECT 1 FROM pg_database WHERE datname = '$DB_NAME'")" != "1" ]]; then
+  # CREATE DATABASE non può stare in un blocco transazionale: niente -1 / --single-transaction
+  psql_admin << 'SQL' >/dev/null
+CREATE DATABASE :"dbname" OWNER :"dbuser";
+SQL
+  ok "Database '$DB_NAME' creato"
 fi
 
-sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE \"$DB_NAME\" TO \"$DB_USER\";" >/dev/null
+psql_admin << 'SQL' >/dev/null
+GRANT ALL PRIVILEGES ON DATABASE :"dbname" TO :"dbuser";
+SQL
+
 # Da PostgreSQL 15 lo schema public non è più scrivibile di default
-sudo -u postgres psql -d "$DB_NAME" \
-  -c "ALTER SCHEMA public OWNER TO \"$DB_USER\"; GRANT ALL ON SCHEMA public TO \"$DB_USER\";" >/dev/null
+psql_admin -d "$DB_NAME" << 'SQL' >/dev/null
+ALTER SCHEMA public OWNER TO :"dbuser";
+GRANT ALL ON SCHEMA public TO :"dbuser";
+SQL
 ok "Database PostgreSQL configurato"
 
 # ── 7. Struttura directory ────────────────────────────────────────────────────
