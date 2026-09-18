@@ -155,6 +155,19 @@ if (( NODE_MAJOR < NODE_VERSION )); then
 fi
 ok "Node.js $(node -v) — npm $(npm -v)"
 
+# npm rimasto da un'installazione precedente può restare più vecchio di quello
+# richiesto dai progetti (vedi "engines" in package.json). npm ci è rigido sul
+# formato del lockfile tra major diversi di npm e fallisce con EUSAGE se non
+# corrisponde, anche a fronte di dipendenze corrette.
+NPM_MIN="${NPM_MIN_VERSION:-10}"
+NPM_MAJOR="$(npm -v | cut -d. -f1)"
+if (( NPM_MAJOR < NPM_MIN )); then
+  warn "npm $(npm -v) trovato, richiesto >= ${NPM_MIN} — aggiorno"
+  sudo npm install -g "npm@${NPM_MIN}"
+  hash -r
+  ok "npm aggiornato a $(npm -v)"
+fi
+
 # ── 4. Utente di sistema ──────────────────────────────────────────────────────
 step "4. Utente sistema '$SALTACODE_USER'"
 if ! id "$SALTACODE_USER" &>/dev/null; then
@@ -344,8 +357,62 @@ ok "Dipendenze backend installate"
 
 # ── 10. Schema database + seed ────────────────────────────────────────────────
 step "10. Migrazione database"
-sudo -H -u "$SALTACODE_USER" env DATABASE_URL="$DATABASE_URL" \
-  bash -c "cd '$APP_DIR/backend' && npx --no-install prisma generate && npx --no-install prisma migrate deploy"
+
+prisma_as_saltacode() {
+  sudo -H -u "$SALTACODE_USER" env DATABASE_URL="$DATABASE_URL" \
+    bash -c "cd '$APP_DIR/backend' && npx --no-install prisma $*"
+}
+
+reset_saltacode_db() {
+  step "10x. Reset database (dati precedenti verranno persi)"
+  sudo -u postgres psql -c "DROP DATABASE IF EXISTS \"$DB_NAME\";" >/dev/null
+  sudo -u postgres psql -v dbname="$DB_NAME" -v dbuser="$DB_USER" << 'SQL' >/dev/null
+CREATE DATABASE :"dbname" OWNER :"dbuser";
+SQL
+  sudo -u postgres psql -v dbname="$DB_NAME" -v dbuser="$DB_USER" -d "$DB_NAME" << 'SQL' >/dev/null
+ALTER SCHEMA public OWNER TO :"dbuser";
+GRANT ALL ON SCHEMA public TO :"dbuser";
+SQL
+  ok "Database '$DB_NAME' ricreato da zero"
+}
+
+prisma_as_saltacode generate
+
+MIGRATE_LOG="$TMP_DIR/migrate-deploy.log"
+if ! prisma_as_saltacode "migrate deploy" 2>&1 | tee "$MIGRATE_LOG"; then
+  if grep -q 'P3018' "$MIGRATE_LOG"; then
+    # P3018: una migrazione precedente è segnata come fallita nella tabella
+    # _prisma_migrations — Prisma si blocca finché quello stato non viene
+    # risolto. Su un'installazione nuova (nessun dato reale da perdere) la via
+    # più semplice è droppare e ricreare il database, non "riparare" la
+    # cronologia delle migrazioni.
+    warn "Errore P3018: una migrazione precedente risulta fallita nel database"
+    prisma_as_saltacode "migrate status" || true
+
+    RESET_ANSWER="${RESET_DB_ON_FAILED_MIGRATION:-ask}"
+    if [[ "$RESET_ANSWER" == "ask" ]]; then
+      if [[ -r /dev/tty ]]; then
+        printf '\n'
+        warn "Ricreare da zero il database '$DB_NAME'? Ogni dato esistente andrà perso. [s/n]"
+        read -r risposta < /dev/tty || risposta="n"
+        [[ "$risposta" =~ ^[SsYy]$ ]] && RESET_ANSWER="yes" || RESET_ANSWER="no"
+      else
+        RESET_ANSWER="no"
+        warn "Esecuzione non interattiva: reset saltato (rilancia con RESET_DB_ON_FAILED_MIGRATION=yes)"
+      fi
+    fi
+
+    if [[ "$RESET_ANSWER" == "yes" ]]; then
+      reset_saltacode_db
+      prisma_as_saltacode "migrate deploy" \
+        || err "migrate deploy fallito anche dopo il reset del database — controlla lo schema Prisma"
+    else
+      err "Migrazione bloccata (P3018). Risolvi manualmente con 'prisma migrate resolve' oppure rilancia con RESET_DB_ON_FAILED_MIGRATION=yes"
+    fi
+  else
+    err "prisma migrate deploy fallito — vedi l'output sopra"
+  fi
+fi
 ok "Schema database applicato"
 
 if [[ "$SEED" == "ask" ]]; then
