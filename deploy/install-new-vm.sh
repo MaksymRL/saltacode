@@ -307,23 +307,40 @@ ok "Sorgenti copiati"
 
 # ── 9. Dipendenze npm backend ─────────────────────────────────────────────────
 step "9. Dipendenze npm backend"
-if sudo -H -u "$SALTACODE_USER" test -f "$APP_DIR/backend/package-lock.json"; then
-  NPM_INSTALL="npm ci --omit=dev --no-fund --no-audit"
-else
-  NPM_INSTALL="npm install --omit=dev --no-fund --no-audit"
-fi
-sudo -H -u "$SALTACODE_USER" bash -c "cd '$APP_DIR/backend' && $NPM_INSTALL"
+
+# npm ci pretende un package-lock.json perfettamente allineato a package.json:
+# se è disallineato esce con EUSAGE invece di risolvere da solo. In quel caso si
+# ripiega su npm install, che ricalcola l'albero e riscrive il lock.
+npm_as_saltacode() {
+  sudo -H -u "$SALTACODE_USER" bash -c "cd '$APP_DIR/backend' && npm $*"
+}
+
+npm_backend_install() {
+  local extra="$1"   # es. "--omit=dev" oppure ""
+  if sudo -H -u "$SALTACODE_USER" test -f "$APP_DIR/backend/package-lock.json"; then
+    if npm_as_saltacode "ci $extra --no-fund --no-audit"; then
+      return 0
+    fi
+    warn "npm ci fallito: package-lock.json non allineato a package.json — ripiego su npm install"
+    warn "Da sistemare nel repo: esegui 'npm install' in backend/ e committa il package-lock.json aggiornato"
+  fi
+  npm_as_saltacode "install $extra --no-fund --no-audit"
+}
+
+npm_backend_install "--omit=dev"
 
 # tsx e prisma servono a runtime: se sono in devDependencies, --omit=dev li esclude
 # e il backend non parte. In quel caso si reinstalla tutto.
 if ! sudo -H -u "$SALTACODE_USER" test -x "$APP_DIR/backend/node_modules/.bin/tsx"; then
   warn "tsx assente con --omit=dev (è in devDependencies) — reinstallo tutte le dipendenze"
   warn "Consiglio: sposta 'tsx' e 'prisma' in dependencies, oppure compila con tsc e usa 'node dist/server.js'"
-  sudo -H -u "$SALTACODE_USER" bash -c "cd '$APP_DIR/backend' && npm install --no-fund --no-audit"
+  npm_backend_install ""
 fi
 sudo -H -u "$SALTACODE_USER" test -x "$APP_DIR/backend/node_modules/.bin/tsx" \
   || err "tsx non installato: il backend non potrebbe avviarsi"
-ok "npm install completato"
+sudo -H -u "$SALTACODE_USER" test -x "$APP_DIR/backend/node_modules/.bin/prisma" \
+  || warn "prisma CLI assente: 'prisma generate' e 'migrate deploy' falliranno"
+ok "Dipendenze backend installate"
 
 # ── 10. Schema database + seed ────────────────────────────────────────────────
 step "10. Migrazione database"
@@ -355,9 +372,10 @@ fi
 # ── 11. Build frontend ────────────────────────────────────────────────────────
 step "11. Build frontend"
 pushd "$REPO_DIR/frontend" >/dev/null
-if [[ -f package-lock.json ]]; then
-  npm ci --no-fund --no-audit
+if [[ -f package-lock.json ]] && npm ci --no-fund --no-audit; then
+  :
 else
+  [[ -f package-lock.json ]] && warn "npm ci fallito sul frontend (lock disallineato) — uso npm install"
   npm install --no-fund --no-audit
 fi
 npm run build          # output non filtrato: in caso di errore serve vederlo
