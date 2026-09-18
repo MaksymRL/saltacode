@@ -16,10 +16,10 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"   # cartella del progetto
 NODE_VERSION="22"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
-ok()   { echo -e "${GREEN}✓ $*${NC}"; }
-warn() { echo -e "${YELLOW}⚠ $*${NC}"; }
-err()  { echo -e "${RED}✗ $*${NC}"; exit 1; }
-step() { echo -e "\n${YELLOW}━━━ $* ━━━${NC}"; }
+ok()   { printf "${GREEN}[OK]  %s${NC}\n" "$*"; }
+warn() { printf "${YELLOW}[!!]  %s${NC}\n" "$*"; }
+err()  { printf "${RED}[ERR] %s${NC}\n" "$*"; exit 1; }
+step() { printf "\n${YELLOW}=== %s ===${NC}\n" "$*"; }
 
 # ── 0. Prerequisiti ───────────────────────────────────────────────────────────
 step "0. Verifica prerequisiti"
