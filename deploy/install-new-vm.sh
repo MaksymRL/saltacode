@@ -1,45 +1,94 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # ============================================================
 # Saltacode — Script di installazione su nuova VM Ubuntu
-# Eseguire come utente con sudo (non come root)
-# Uso: bash install-new-vm.sh
+# Eseguire come utente con sudo (NON come root)
+#
+# Uso:
+#   bash deploy/install-new-vm.sh              # chiede se fare il seed
+#   SEED=yes bash deploy/install-new-vm.sh     # seed automatico (non interattivo)
+#   SEED=no  bash deploy/install-new-vm.sh     # salta il seed
+#   REPO_DIR=/percorso/repo bash install-new-vm.sh
+#
+# Lo script è idempotente: può essere rieseguito sulla stessa VM.
 # ============================================================
-set -euo pipefail
+set -Eeuo pipefail
+shopt -s nullglob
 
-SALTACODE_USER="saltacode"
-DB_NAME="saltacode_db"
-DB_USER="saltacode"
-DB_PASS="saltacode_db"
-APP_DIR="/opt/saltacode"
-LOG_DIR="/var/log/saltacode"
-REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"   # cartella del progetto
-NODE_VERSION="22"
+# ── Variabili (sovrascrivibili da ambiente) ───────────────────────────────────
+SALTACODE_USER="${SALTACODE_USER:-saltacode}"
+DB_NAME="${DB_NAME:-saltacode_db}"
+DB_USER="${DB_USER:-saltacode}"
+DB_PASS="${DB_PASS:-}"                 # se vuota, viene generata casualmente
+APP_DIR="${APP_DIR:-/opt/saltacode}"
+LOG_DIR="${LOG_DIR:-/var/log/saltacode}"
+NODE_VERSION="${NODE_VERSION:-22}"
+HOSTNAME_MDNS="${HOSTNAME_MDNS:-saltacode}"
+SEED="${SEED:-ask}"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
-ok()   { printf "${GREEN}[OK]  %s${NC}\n" "$*"; }
-warn() { printf "${YELLOW}[!!]  %s${NC}\n" "$*"; }
-err()  { printf "${RED}[ERR] %s${NC}\n" "$*"; exit 1; }
-step() { printf "\n${YELLOW}=== %s ===${NC}\n" "$*"; }
+# NB: il testo passa come argomento, non come format string (niente sorprese con i '%')
+ok()   { printf '%b[OK]  %s%b\n' "$GREEN"  "$*" "$NC"; }
+warn() { printf '%b[!!]  %s%b\n' "$YELLOW" "$*" "$NC"; }
+err()  { printf '%b[ERR] %s%b\n' "$RED"    "$*" "$NC" >&2; exit 1; }
+step() { printf '\n%b=== %s ===%b\n' "$YELLOW" "$*" "$NC"; }
+
+TMP_DIR="$(mktemp -d)"
+cleanup() { rm -rf "$TMP_DIR"; }
+trap cleanup EXIT
+trap 'rc=$?; printf "%b[ERR] comando fallito (exit %s) alla riga %s: %s%b\n" "$RED" "$rc" "$LINENO" "$BASH_COMMAND" "$NC" >&2; exit $rc' ERR
 
 # ── 0. Prerequisiti ───────────────────────────────────────────────────────────
 step "0. Verifica prerequisiti"
-[[ $EUID -eq 0 ]] && err "Non eseguire come root. Usa un utente con sudo."
+if [[ $EUID -eq 0 ]]; then
+  err "Non eseguire come root. Usa un utente con sudo."
+fi
 command -v sudo >/dev/null || err "sudo non disponibile"
+sudo -v || err "Servono privilegi sudo"
+
+# Risoluzione robusta della cartella del repository:
+# lo script può stare nella radice del repo o in una sottocartella (es. deploy/).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -z "${REPO_DIR:-}" ]]; then
+  if [[ -d "$SCRIPT_DIR/backend" && -d "$SCRIPT_DIR/frontend" ]]; then
+    REPO_DIR="$SCRIPT_DIR"
+  else
+    REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+  fi
+fi
+[[ -d "$REPO_DIR/backend" && -d "$REPO_DIR/frontend" ]] \
+  || err "Repository non trovato in '$REPO_DIR' (mancano backend/ e frontend/). Imposta REPO_DIR=..."
 ok "Utente corrente: $(whoami)"
+ok "Repository: $REPO_DIR"
 
 # ── 1. Aggiornamento sistema ──────────────────────────────────────────────────
 step "1. Aggiornamento sistema"
+export DEBIAN_FRONTEND=noninteractive
 sudo apt-get update -qq
-sudo apt-get install -y -qq \
-  curl wget git nginx postgresql postgresql-contrib \
-  espeak-ng libttspico-utils \
-  avahi-daemon avahi-utils \
-  chrony build-essential
+
+# Pacchetti indispensabili: se uno manca, l'installazione deve fermarsi
+PKG_BASE=(curl wget git ca-certificates gnupg openssl rsync
+          nginx postgresql postgresql-contrib
+          avahi-daemon avahi-utils chrony build-essential)
+sudo apt-get install -y -qq "${PKG_BASE[@]}"
+
+# Pacchetti opzionali (TTS): non devono far fallire l'installazione
+PKG_OPT=(espeak-ng libttspico-utils)
+for pkg in "${PKG_OPT[@]}"; do
+  if ! sudo apt-get install -y -qq "$pkg" 2>/dev/null; then
+    warn "Pacchetto opzionale '$pkg' non disponibile su questa release — proseguo"
+  fi
+done
 ok "Pacchetti installati"
 
-# Configura mDNS: la macchina risponde a "saltacode.local" su qualsiasi rete
-sudo hostnamectl set-hostname saltacode 2>/dev/null || true
-cat > /tmp/saltacode-http.service << 'AVAHIEOF'
+# ── 1b. mDNS ──────────────────────────────────────────────────────────────────
+step "1b. mDNS (saltacode.local)"
+sudo hostnamectl set-hostname "$HOSTNAME_MDNS" || warn "hostnamectl non disponibile"
+# Senza la voce in /etc/hosts, sudo diventa lentissimo (risoluzione hostname)
+if ! grep -qE "^127\.0\.1\.1\s+.*\b${HOSTNAME_MDNS}\b" /etc/hosts; then
+  printf '127.0.1.1 %s\n' "$HOSTNAME_MDNS" | sudo tee -a /etc/hosts >/dev/null
+fi
+
+sudo tee /etc/avahi/services/saltacode.service >/dev/null << 'AVAHIEOF'
 <?xml version="1.0" standalone='no'?>
 <!DOCTYPE service-group SYSTEM "avahi-service.dtd">
 <service-group>
@@ -51,21 +100,37 @@ cat > /tmp/saltacode-http.service << 'AVAHIEOF'
   </service>
 </service-group>
 AVAHIEOF
-sudo cp /tmp/saltacode-http.service /etc/avahi/services/saltacode.service
-sudo systemctl enable --now avahi-daemon 2>/dev/null || true
-ok "mDNS configurato — accessibile come http://saltacode.local/"
+sudo systemctl enable --now avahi-daemon || warn "avahi-daemon non avviato"
+ok "mDNS configurato — accessibile come http://${HOSTNAME_MDNS}.local/"
 
-# ── 2. Orologio NTP ──────────────────────────────────────────────────────────
+# ── 2. Orologio NTP ───────────────────────────────────────────────────────────
 step "2. Configurazione NTP (orologio)"
-# Corregge subito l'orario
-sudo chronyc makestep 2>/dev/null || true
-# Configura makestep permanente e script post-resume
-sudo sed -i 's/^makestep 1 3/makestep 1 -1/' /etc/chrony.conf 2>/dev/null || \
-sudo sed -i 's/^makestep 1 3/makestep 1 -1/' /etc/chrony/chrony.conf 2>/dev/null || true
-sudo systemctl restart chrony 2>/dev/null || true
+CHRONY_CONF=""
+for f in /etc/chrony/chrony.conf /etc/chrony.conf; do
+  if [[ -f "$f" ]]; then CHRONY_CONF="$f"; break; fi
+done
 
-# Script auto-correzione dopo resume VM
-cat > /tmp/99-fix-clock.sh << 'CLOCKSCRIPT'
+if [[ -n "$CHRONY_CONF" ]]; then
+  # makestep 1 -1 = correggi l'orario di scatto sempre, non solo ai primi 3 aggiornamenti
+  if grep -qE '^\s*#?\s*makestep' "$CHRONY_CONF"; then
+    sudo sed -i -E 's/^\s*#?\s*makestep.*/makestep 1 -1/' "$CHRONY_CONF"
+  else
+    printf 'makestep 1 -1\n' | sudo tee -a "$CHRONY_CONF" >/dev/null
+  fi
+  ok "Configurato $CHRONY_CONF"
+else
+  warn "chrony.conf non trovato — salto la configurazione"
+fi
+
+# Il servizio si chiama 'chrony' su Ubuntu, 'chronyd' altrove
+CHRONY_SVC="chrony"
+systemctl list-unit-files 2>/dev/null | grep -q '^chronyd\.service' && CHRONY_SVC="chronyd"
+sudo systemctl enable --now "$CHRONY_SVC" || warn "Servizio $CHRONY_SVC non avviato"
+sudo systemctl restart "$CHRONY_SVC" || true
+sudo chronyc makestep >/dev/null 2>&1 || warn "chronyc makestep non riuscito (normale se chrony si sta avviando)"
+
+# Script auto-correzione dopo resume della VM
+sudo tee /usr/lib/systemd/system-sleep/99-fix-clock.sh >/dev/null << 'CLOCKSCRIPT'
 #!/bin/bash
 case "$1/$2" in
   post/*)
@@ -75,15 +140,18 @@ case "$1/$2" in
     ;;
 esac
 CLOCKSCRIPT
-sudo cp /tmp/99-fix-clock.sh /lib/systemd/system-sleep/99-fix-clock.sh
-sudo chmod +x /lib/systemd/system-sleep/99-fix-clock.sh
+sudo chmod +x /usr/lib/systemd/system-sleep/99-fix-clock.sh
 ok "NTP configurato + script post-resume installato"
 
-# ── 3. Node.js ───────────────────────────────────────────────────────────────
+# ── 3. Node.js ────────────────────────────────────────────────────────────────
 step "3. Node.js $NODE_VERSION"
-if ! command -v node >/dev/null 2>&1 || [[ "$(node -v | cut -d. -f1 | tr -d v)" -lt "$NODE_VERSION" ]]; then
-  curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | sudo -E bash -
-  sudo apt-get install -y nodejs
+NODE_MAJOR=0
+if command -v node >/dev/null 2>&1; then
+  NODE_MAJOR="$(node -v | sed -E 's/^v([0-9]+).*/\1/')"
+fi
+if (( NODE_MAJOR < NODE_VERSION )); then
+  curl -fsSL "https://deb.nodesource.com/setup_${NODE_VERSION}.x" | sudo -E bash -
+  sudo apt-get install -y -qq nodejs
 fi
 ok "Node.js $(node -v) — npm $(npm -v)"
 
@@ -95,69 +163,110 @@ if ! id "$SALTACODE_USER" &>/dev/null; then
 else
   ok "Utente già esistente"
 fi
+SALTACODE_HOME="$(getent passwd "$SALTACODE_USER" | cut -d: -f6)"
+[[ -n "$SALTACODE_HOME" ]] || err "Home di $SALTACODE_USER non determinabile"
+sudo mkdir -p "$SALTACODE_HOME"
+sudo chown "$SALTACODE_USER:$SALTACODE_USER" "$SALTACODE_HOME"
 
-# ── 5. PM2 ───────────────────────────────────────────────────────────────────
+# ── 5. PM2 ────────────────────────────────────────────────────────────────────
 step "5. PM2 (process manager)"
-if ! sudo -u "$SALTACODE_USER" npm list -g pm2 &>/dev/null; then
-  sudo npm install -g pm2
+if ! command -v pm2 >/dev/null 2>&1; then
+  sudo npm install -g pm2 --no-fund --no-audit
 fi
-# Avvio automatico al boot
-sudo env PATH="$PATH:/usr/bin" pm2 startup systemd -u "$SALTACODE_USER" --hp "/home/$SALTACODE_USER" | tail -1 | sudo bash -
-ok "PM2 installato"
+PM2_BIN="$(command -v pm2)"
+# Eseguito da root, 'pm2 startup' installa da sé l'unit systemd: niente pipe in bash
+sudo env PATH="$PATH" "$PM2_BIN" startup systemd \
+  -u "$SALTACODE_USER" --hp "$SALTACODE_HOME" >/dev/null
+ok "PM2 $( "$PM2_BIN" -v ) installato e abilitato al boot"
 
 # ── 6. PostgreSQL ─────────────────────────────────────────────────────────────
 step "6. Database PostgreSQL"
 sudo systemctl enable --now postgresql
 
-# Crea utente e database se non esistono
-sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'" | grep -q 1 || \
-  sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';"
+if [[ -z "$DB_PASS" ]]; then
+  DB_PASS="$(openssl rand -hex 24)"
+  GENERATED_PASS=1
+else
+  GENERATED_PASS=0
+fi
 
-sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'" | grep -q 1 || \
-  sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
+# Password passata come parametro, non concatenata nella query
+if sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'" | grep -q 1; then
+  sudo -u postgres psql -v "pw=$DB_PASS" \
+    -c "ALTER USER \"$DB_USER\" WITH PASSWORD :'pw';" >/dev/null
+else
+  sudo -u postgres psql -v "pw=$DB_PASS" \
+    -c "CREATE USER \"$DB_USER\" WITH PASSWORD :'pw';" >/dev/null
+fi
 
-sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;"
+if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'" | grep -q 1; then
+  sudo -u postgres psql -c "CREATE DATABASE \"$DB_NAME\" OWNER \"$DB_USER\";" >/dev/null
+fi
+
+sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE \"$DB_NAME\" TO \"$DB_USER\";" >/dev/null
+# Da PostgreSQL 15 lo schema public non è più scrivibile di default
+sudo -u postgres psql -d "$DB_NAME" \
+  -c "ALTER SCHEMA public OWNER TO \"$DB_USER\"; GRANT ALL ON SCHEMA public TO \"$DB_USER\";" >/dev/null
 ok "Database PostgreSQL configurato"
 
 # ── 7. Struttura directory ────────────────────────────────────────────────────
 step "7. Directory applicazione"
-sudo mkdir -p "$APP_DIR/backend/src"
-sudo mkdir -p "$APP_DIR/frontend/dist"
-sudo mkdir -p "$LOG_DIR"
+sudo mkdir -p "$APP_DIR/backend/src" "$APP_DIR/backend/prisma" "$APP_DIR/backend/assets" \
+              "$APP_DIR/frontend/dist" "$LOG_DIR"
 sudo chown -R "$SALTACODE_USER:$SALTACODE_USER" "$APP_DIR" "$LOG_DIR"
+sudo chmod 755 "$APP_DIR"          # nginx deve poter attraversare la directory
 ok "Directory create"
 
 # ── 8. Copia sorgenti ─────────────────────────────────────────────────────────
 step "8. Copia sorgenti dal repository"
-# Backend
-sudo -u "$SALTACODE_USER" cp -r "$REPO_DIR/backend/src/"* "$APP_DIR/backend/src/"
-sudo -u "$SALTACODE_USER" cp "$REPO_DIR/backend/package.json" "$APP_DIR/backend/"
-sudo -u "$SALTACODE_USER" cp "$REPO_DIR/backend/package-lock.json" "$APP_DIR/backend/" 2>/dev/null || true
-sudo -u "$SALTACODE_USER" cp "$REPO_DIR/backend/tsconfig.json" "$APP_DIR/backend/"
-sudo -u "$SALTACODE_USER" cp -r "$REPO_DIR/backend/prisma" "$APP_DIR/backend/"
+# Copia come root (l'utente di sistema non ha accesso alla home dell'utente corrente),
+# poi si sistemano i permessi. 'rsync --delete' evita residui di versioni precedenti.
+sudo rsync -a --delete "$REPO_DIR/backend/src/"    "$APP_DIR/backend/src/"
+sudo rsync -a --delete "$REPO_DIR/backend/prisma/" "$APP_DIR/backend/prisma/"
+sudo cp -a "$REPO_DIR/backend/package.json"  "$APP_DIR/backend/"
+sudo cp -a "$REPO_DIR/backend/tsconfig.json" "$APP_DIR/backend/"
+if [[ -f "$REPO_DIR/backend/package-lock.json" ]]; then
+  sudo cp -a "$REPO_DIR/backend/package-lock.json" "$APP_DIR/backend/"
+fi
+if [[ -d "$REPO_DIR/backend/assets" ]]; then
+  sudo rsync -a "$REPO_DIR/backend/assets/" "$APP_DIR/backend/assets/"
+fi
 
-# File .env backend
-cat > /tmp/backend.env << ENVEOF
+# File .env del backend: conserva il JWT_SECRET esistente, altrimenti tutte
+# le sessioni attive verrebbero invalidate a ogni riesecuzione dello script.
+JWT_SECRET=""
+if sudo test -f "$APP_DIR/backend/.env"; then
+  JWT_SECRET="$(sudo sed -n 's/^JWT_SECRET=//p' "$APP_DIR/backend/.env" | head -n1)"
+fi
+[[ -n "$JWT_SECRET" ]] || JWT_SECRET="$(openssl rand -hex 32)"
+
+DATABASE_URL="postgresql://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}?schema=public"
+
+( umask 077
+  cat > "$TMP_DIR/backend.env" << ENVEOF
 NODE_ENV=production
 PORT=3000
-DATABASE_URL=postgresql://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}?schema=public
-JWT_SECRET=$(openssl rand -hex 32)
+DATABASE_URL=${DATABASE_URL}
+JWT_SECRET=${JWT_SECRET}
 BCRYPT_COST_FACTOR=12
 CORS_ORIGIN=*
 LOG_DIR=${LOG_DIR}
 ENVEOF
-sudo -u "$SALTACODE_USER" cp /tmp/backend.env "$APP_DIR/backend/.env"
+)
+# 0600: il file contiene password DB e secret JWT
+sudo install -o "$SALTACODE_USER" -g "$SALTACODE_USER" -m 600 \
+  "$TMP_DIR/backend.env" "$APP_DIR/backend/.env"
 
 # Ecosystem PM2
-sudo -u "$SALTACODE_USER" cp "$REPO_DIR/deploy/saltacode.service" /tmp/ 2>/dev/null || true
-cat > /tmp/ecosystem.cjs << ECOEOF
+cat > "$TMP_DIR/ecosystem.config.cjs" << ECOEOF
 module.exports = {
   apps: [{
     name: 'saltacode-backend',
     cwd: '${APP_DIR}/backend',
-    script: 'src/server.ts',
-    interpreter: 'npx',
-    interpreter_args: 'tsx',
+    // tsx installato localmente: niente 'npx' a ogni restart (richiederebbe rete)
+    script: 'node_modules/.bin/tsx',
+    args: 'src/server.ts',
+    interpreter: 'none',
     instances: 1,
     exec_mode: 'fork',
     autorestart: true,
@@ -170,138 +279,193 @@ module.exports = {
   }],
 };
 ECOEOF
-sudo -u "$SALTACODE_USER" cp /tmp/ecosystem.cjs "$APP_DIR/ecosystem.config.cjs"
+sudo install -o "$SALTACODE_USER" -g "$SALTACODE_USER" -m 644 \
+  "$TMP_DIR/ecosystem.config.cjs" "$APP_DIR/ecosystem.config.cjs"
 
-# Asset logo
-sudo mkdir -p "$APP_DIR/backend/assets"
-[[ -f "$REPO_DIR/backend/assets/logo-test.png" ]] && \
-  sudo -u "$SALTACODE_USER" cp "$REPO_DIR/backend/assets/logo-test.png" "$APP_DIR/backend/src/logo-test.png"
+sudo chown -R "$SALTACODE_USER:$SALTACODE_USER" "$APP_DIR/backend"
 ok "Sorgenti copiati"
 
-# ── 9. Dipendenze npm backend ──────────────────────────────────────────────────
+# ── 9. Dipendenze npm backend ─────────────────────────────────────────────────
 step "9. Dipendenze npm backend"
-sudo -u "$SALTACODE_USER" bash -c "cd $APP_DIR/backend && npm install --production 2>&1 | tail -3"
+if sudo -H -u "$SALTACODE_USER" test -f "$APP_DIR/backend/package-lock.json"; then
+  NPM_INSTALL="npm ci --omit=dev --no-fund --no-audit"
+else
+  NPM_INSTALL="npm install --omit=dev --no-fund --no-audit"
+fi
+sudo -H -u "$SALTACODE_USER" bash -c "cd '$APP_DIR/backend' && $NPM_INSTALL"
+
+# tsx e prisma servono a runtime: se sono in devDependencies, --omit=dev li esclude
+# e il backend non parte. In quel caso si reinstalla tutto.
+if ! sudo -H -u "$SALTACODE_USER" test -x "$APP_DIR/backend/node_modules/.bin/tsx"; then
+  warn "tsx assente con --omit=dev (è in devDependencies) — reinstallo tutte le dipendenze"
+  warn "Consiglio: sposta 'tsx' e 'prisma' in dependencies, oppure compila con tsc e usa 'node dist/server.js'"
+  sudo -H -u "$SALTACODE_USER" bash -c "cd '$APP_DIR/backend' && npm install --no-fund --no-audit"
+fi
+sudo -H -u "$SALTACODE_USER" test -x "$APP_DIR/backend/node_modules/.bin/tsx" \
+  || err "tsx non installato: il backend non potrebbe avviarsi"
 ok "npm install completato"
 
 # ── 10. Schema database + seed ────────────────────────────────────────────────
 step "10. Migrazione database"
-sudo -u "$SALTACODE_USER" bash -c "
-  cd $APP_DIR/backend
-  export DATABASE_URL='postgresql://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}?schema=public'
-  npx prisma migrate deploy 2>&1 | tail -5
-  npx prisma generate 2>&1 | tail -3
-"
+sudo -H -u "$SALTACODE_USER" env DATABASE_URL="$DATABASE_URL" \
+  bash -c "cd '$APP_DIR/backend' && npx --no-install prisma generate && npx --no-install prisma migrate deploy"
 ok "Schema database applicato"
 
-echo ""
-warn "Vuoi eseguire il seed (crea dati iniziali: superadmin, ruoli ecc.)? [s/n]"
-read -r risposta
-if [[ "$risposta" =~ ^[Ss]$ ]]; then
-  sudo -u "$SALTACODE_USER" bash -c "
-    cd $APP_DIR/backend
-    export DATABASE_URL='postgresql://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}?schema=public'
-    npx tsx prisma/seed.ts 2>&1 | tail -5
-  "
+if [[ "$SEED" == "ask" ]]; then
+  if [[ -r /dev/tty ]]; then
+    printf '\n'
+    warn "Vuoi eseguire il seed (crea dati iniziali: superadmin, ruoli ecc.)? [s/n]"
+    read -r risposta < /dev/tty || risposta="n"
+    [[ "$risposta" =~ ^[SsYy]$ ]] && SEED="yes" || SEED="no"
+  else
+    SEED="no"
+    warn "Esecuzione non interattiva: seed saltato (rilancia con SEED=yes per eseguirlo)"
+  fi
+fi
+
+SEED_ESEGUITO=0
+if [[ "$SEED" == "yes" ]]; then
+  step "10b. Seed dati iniziali"
+  sudo -H -u "$SALTACODE_USER" env DATABASE_URL="$DATABASE_URL" \
+    bash -c "cd '$APP_DIR/backend' && npx --no-install tsx prisma/seed.ts"
+  SEED_ESEGUITO=1
   ok "Seed completato"
 fi
 
 # ── 11. Build frontend ────────────────────────────────────────────────────────
 step "11. Build frontend"
-cd "$REPO_DIR/frontend"
-npm install 2>&1 | tail -3
-npm run build 2>&1 | tail -5
-cp -r dist/* "$APP_DIR/frontend/dist/"
-# Audio DingLing
-[[ -f "$REPO_DIR/frontend/public/DingLing.wav" ]] && \
-  cp "$REPO_DIR/frontend/public/DingLing.wav" "$APP_DIR/frontend/dist/"
-[[ -f "$REPO_DIR/frontend/public/logo.svg" ]] && \
-  cp "$REPO_DIR/frontend/public/logo.svg" "$APP_DIR/frontend/dist/"
+pushd "$REPO_DIR/frontend" >/dev/null
+if [[ -f package-lock.json ]]; then
+  npm ci --no-fund --no-audit
+else
+  npm install --no-fund --no-audit
+fi
+npm run build          # output non filtrato: in caso di errore serve vederlo
+[[ -d dist ]] || err "La build non ha prodotto la cartella dist/"
+
+sudo rsync -a --delete dist/ "$APP_DIR/frontend/dist/"
+for extra in public/DingLing.wav public/logo.svg; do
+  [[ -f "$extra" ]] && sudo cp -a "$extra" "$APP_DIR/frontend/dist/"
+done
+popd >/dev/null
+
+sudo chown -R "$SALTACODE_USER:$SALTACODE_USER" "$APP_DIR/frontend"
+sudo chmod -R a+rX "$APP_DIR/frontend"        # nginx (www-data) deve poter leggere
 ok "Frontend buildato e copiato"
 
 # ── 12. Nginx ─────────────────────────────────────────────────────────────────
 step "12. Configurazione Nginx"
-cat > /tmp/saltacode-nginx.conf << 'NGINXEOF'
+# Heredoc non quotato: $APP_DIR viene sostituito, le variabili di nginx sono con \$
+cat > "$TMP_DIR/saltacode-nginx.conf" << NGINXEOF
 server {
-    listen 80;
+    listen 80 default_server;
+    listen [::]:80 default_server;
     server_name _;
 
     gzip on;
-    gzip_types text/plain text/css application/json application/javascript text/xml application/xml;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml image/svg+xml;
 
-    root /opt/saltacode/frontend/dist;
+    client_max_body_size 25m;
+
+    root ${APP_DIR}/frontend/dist;
     index index.html;
 
     location / {
-        try_files $uri $uri/ /index.html;
+        try_files \$uri \$uri/ /index.html;
     }
+
     location /api/ {
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_read_timeout 60s;
         proxy_connect_timeout 10s;
     }
+
     location /ws {
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
     }
-    location /health {
-        proxy_pass http://127.0.0.1:3000;
+
+    location = /health {
+        proxy_pass http://127.0.0.1:3000/health;
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
+        proxy_set_header Host \$host;
     }
 }
 NGINXEOF
-sudo cp /tmp/saltacode-nginx.conf /etc/nginx/sites-available/saltacode
+sudo install -m 644 "$TMP_DIR/saltacode-nginx.conf" /etc/nginx/sites-available/saltacode
 sudo ln -sf /etc/nginx/sites-available/saltacode /etc/nginx/sites-enabled/saltacode
 sudo rm -f /etc/nginx/sites-enabled/default
-sudo nginx -t && sudo systemctl enable --now nginx && sudo systemctl reload nginx
+sudo nginx -t
+sudo systemctl enable nginx
+sudo systemctl restart nginx          # 'reload' fallisce se nginx non è già in esecuzione
 ok "Nginx configurato"
+
+# Firewall, solo se ufw è attivo
+if command -v ufw >/dev/null 2>&1 && sudo ufw status 2>/dev/null | grep -q '^Status: active'; then
+  sudo ufw allow 80/tcp   >/dev/null || true
+  sudo ufw allow 5353/udp >/dev/null || true   # mDNS
+  ok "Regole ufw aggiunte (80/tcp, 5353/udp)"
+fi
 
 # ── 13. Avvio backend ─────────────────────────────────────────────────────────
 step "13. Avvio backend con PM2"
-sudo -u "$SALTACODE_USER" bash -c "
-  pm2 start $APP_DIR/ecosystem.config.cjs
-  pm2 save
-" 2>&1 | tail -5
+# -H: HOME punta alla home di saltacode, altrimenti PM2 scrive lo stato nella home sbagliata.
+# startOrReload: avvia se fermo, ricarica se già attivo (script rieseguibile).
+sudo -H -u "$SALTACODE_USER" pm2 startOrReload "$APP_DIR/ecosystem.config.cjs" --update-env
+sudo -H -u "$SALTACODE_USER" pm2 save
 ok "Backend avviato"
 
 # ── 14. Verifica finale ───────────────────────────────────────────────────────
 step "14. Verifica installazione"
-sleep 4
-HTTP=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/api/health)
+HTTP="000"
+for _ in {1..15}; do
+  HTTP="$(curl -s -o /dev/null -w '%{http_code}' http://localhost/api/health || true)"
+  [[ "$HTTP" == "200" ]] && break
+  sleep 2
+done
 if [[ "$HTTP" == "200" ]]; then
   ok "API risponde correttamente (HTTP $HTTP)"
 else
-  warn "API risponde HTTP $HTTP — controlla i log: pm2 logs saltacode-backend"
+  warn "API risponde HTTP $HTTP — controlla i log: sudo -H -u $SALTACODE_USER pm2 logs saltacode-backend"
 fi
 
-IP=$(hostname -I | awk '{print $1}')
-echo ""
-echo -e "${GREEN}╔══════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║         INSTALLAZIONE COMPLETATA                      ║${NC}"
-echo -e "${GREEN}╚══════════════════════════════════════════════════════╝${NC}"
-echo ""
-echo -e "  Accesso per IP:    ${GREEN}http://${IP}/${NC}"
-echo -e "  Accesso per nome:  ${GREEN}http://saltacode.local/${NC}  (qualsiasi rete)"
-echo -e "  Monitor:           ${GREEN}http://saltacode.local/monitor${NC}"
-echo ""
-echo -e "  Credenziali iniziali superadmin:"
-echo -e "  Username: ${GREEN}superadmin${NC}"
-echo -e "  Password: ${GREEN}Admin@Saltacode1${NC}  (cambiarla al primo accesso)"
-echo ""
-echo -e "  Comandi utili:"
-echo -e "  ${YELLOW}sudo -u saltacode pm2 status${NC}          # stato backend"
-echo -e "  ${YELLOW}sudo -u saltacode pm2 logs${NC}            # log in tempo reale"
-echo -e "  ${YELLOW}sudo -u saltacode pm2 restart 0${NC}       # riavvia backend"
-echo -e "  ${YELLOW}sudo nginx -t && sudo systemctl reload nginx${NC}  # ricarica nginx"
-echo ""
+IP="$(hostname -I | awk '{print $1}')"
+printf '\n'
+printf '%b+------------------------------------------------------+%b\n' "$GREEN" "$NC"
+printf '%b|            INSTALLAZIONE COMPLETATA                   |%b\n' "$GREEN" "$NC"
+printf '%b+------------------------------------------------------+%b\n' "$GREEN" "$NC"
+printf '\n'
+printf '  Accesso per IP:    %b http://%s/%b\n'            "$GREEN" "$IP" "$NC"
+printf '  Accesso per nome:  %b http://%s.local/%b  (qualsiasi rete)\n' "$GREEN" "$HOSTNAME_MDNS" "$NC"
+printf '  Monitor:           %b http://%s.local/monitor%b\n' "$GREEN" "$HOSTNAME_MDNS" "$NC"
+printf '\n'
+if (( SEED_ESEGUITO )); then
+  printf '  Credenziali iniziali superadmin:\n'
+  printf '  Username: %bsuperadmin%b\n'        "$GREEN" "$NC"
+  printf '  Password: %bAdmin@Saltacode1%b  (cambiarla al primo accesso)\n' "$GREEN" "$NC"
+else
+  printf '  Seed non eseguito: nessun utente iniziale creato.\n'
+  printf '  Per eseguirlo: %bSEED=yes bash %s%b\n' "$YELLOW" "${BASH_SOURCE[0]}" "$NC"
+fi
+printf '\n'
+if (( GENERATED_PASS )); then
+  printf '  Password DB generata automaticamente e salvata in %s/backend/.env (0600)\n' "$APP_DIR"
+  printf '\n'
+fi
+printf '  Comandi utili:\n'
+printf '  %bsudo -H -u %s pm2 status%b               # stato backend\n'  "$YELLOW" "$SALTACODE_USER" "$NC"
+printf '  %bsudo -H -u %s pm2 logs%b                 # log in tempo reale\n' "$YELLOW" "$SALTACODE_USER" "$NC"
+printf '  %bsudo -H -u %s pm2 restart saltacode-backend%b\n' "$YELLOW" "$SALTACODE_USER" "$NC"
+printf '  %bsudo nginx -t && sudo systemctl reload nginx%b  # ricarica nginx\n' "$YELLOW" "$NC"
+printf '\n'
