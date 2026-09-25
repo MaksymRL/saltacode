@@ -306,17 +306,14 @@ export default function AdminDashboard() {
       });
     }
     if (msg.type === 'NUMERO_CHIAMATO') {
-      const { servizioId } = msg as unknown as { servizioId: number };
+      const { servizioId, chiamateOggi } = msg as unknown as { servizioId: number; chiamateOggi?: number };
       setCode((prev) => prev.map((c) => c.servizioId === servizioId ? { ...c, count: Math.max(0, c.count - 1) } : c));
-    }
-    if (msg.type === 'CODA_AGGIORNATA') {
-      const { servizioId, count } = msg as unknown as { servizioId: number; count: number };
-      setCode((prev) => {
-        const ex = prev.find((c) => c.servizioId === servizioId);
-        if (ex) return prev.map((c) => c.servizioId === servizioId ? { ...c, count } : c);
-        const s = servizi.find((sv) => sv.id === servizioId);
-        return [...prev, { servizioId, nomeServizio: s?.nome ?? '?', count }];
-      });
+      if (chiamateOggi !== undefined) {
+        setServizi((prev) => prev.map((s) => s.id === servizioId
+          ? { ...s, _count: { ...s._count, chiamate: chiamateOggi } }
+          : s
+        ));
+      }
     }
   }, [servizi]);
 

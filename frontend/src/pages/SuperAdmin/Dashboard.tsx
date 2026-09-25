@@ -61,10 +61,14 @@ export default function SuperAdminDashboard() {
       });
     }
     if (msg.type === 'NUMERO_CHIAMATO') {
-      const { servizioId } = msg as unknown as { servizioId: number };
-      setCode((prev) =>
-        prev.map((c) => c.servizioId === servizioId ? { ...c, count: Math.max(0, c.count - 1) } : c)
-      );
+      const { servizioId, chiamateOggi } = msg as unknown as { servizioId: number; chiamateOggi?: number };
+      setCode((prev) => prev.map((c) => c.servizioId === servizioId ? { ...c, count: Math.max(0, c.count - 1) } : c));
+      if (chiamateOggi !== undefined) {
+        setServizi((prev) => prev.map((s) => s.id === servizioId
+          ? { ...s, _count: { ...s._count, chiamate: chiamateOggi } }
+          : s
+        ));
+      }
     }
   }, []);
 
@@ -473,7 +477,7 @@ export default function SuperAdminDashboard() {
             <h2 style={{ marginTop: 0 }}>Code in tempo reale — tutte le aree</h2>
 
             {/* Impostazioni monitor */}
-            <div style={{ ...cardStyle, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', marginBottom: 20, background: '#1e293b', color: 'white' }}>
+            <div style={{ ...cardStyle, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', marginBottom: 16, background: '#1e293b', color: 'white', flexWrap: 'wrap', gap: 12 }}>
               <div>
                 <div style={{ fontWeight: 700, fontSize: 14 }}>🔊 Voce annunci monitor</div>
                 <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>
@@ -493,6 +497,63 @@ export default function SuperAdminDashboard() {
               >
                 {monitorVoiceLoading ? '…' : monitorVoice ? '🔊 Voce ON' : '🔇 Voce OFF'}
               </button>
+            </div>
+
+            {/* Upload logo */}
+            <div style={{ ...cardStyle, padding: '12px 20px', marginBottom: 20, background: '#1e293b', color: 'white' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>🖼 Logo organizzazione</div>
+                  <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>
+                    PNG/JPEG per il ticket stampato · SVG per le schermate. Max 2MB.
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <img src="/logo.svg" alt="Logo attuale" height={36}
+                    style={{ borderRadius: 4, background: 'rgba(255,255,255,0.08)', padding: 4 }}
+                    onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                  <label style={{
+                    background: '#3b82f6', color: 'white', border: 'none', borderRadius: 6,
+                    padding: '7px 14px', fontWeight: 700, fontSize: 13, cursor: 'pointer',
+                  }}>
+                    📤 Carica logo
+                    <input type="file" accept="image/png,image/jpeg,image/jpg,image/svg+xml"
+                      style={{ display: 'none' }}
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        try {
+                          const buffer = await file.arrayBuffer();
+                          await apiClient.post('/logo/upload', buffer, {
+                            headers: { 'Content-Type': file.type },
+                          });
+                          // Forza ricaricamento del logo nel browser
+                          const imgs = document.querySelectorAll<HTMLImageElement>('img[src*="/logo.svg"]');
+                          imgs.forEach((img) => { img.src = `/logo.svg?t=${Date.now()}`; });
+                          alert('Logo aggiornato! Ricarica la pagina su tutti i dispositivi.');
+                        } catch (err: any) {
+                          alert(err?.response?.data?.error ?? 'Errore upload logo.');
+                        }
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
+                  <button
+                    onClick={async () => {
+                      const ok = await confirm('Ripristinare il logo di default?', { title: 'Ripristina logo', confirmLabel: 'Ripristina' });
+                      if (!ok) return;
+                      try {
+                        await apiClient.delete('/logo/reset');
+                        const imgs = document.querySelectorAll<HTMLImageElement>('img[src*="/logo.svg"]');
+                        imgs.forEach((img) => { img.src = `/logo.svg?t=${Date.now()}`; });
+                      } catch { /* ignora */ }
+                    }}
+                    style={{ background: '#475569', color: 'white', border: 'none', borderRadius: 6, padding: '7px 12px', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}
+                  >
+                    ↩ Default
+                  </button>
+                </div>
+              </div>
             </div>
             {/* Tabella coda compatta — stessa struttura dell'operatore */}
             <div style={{ background: 'white', borderRadius: 8, boxShadow: '0 1px 3px rgba(0,0,0,0.1)', overflow: 'hidden' }}>

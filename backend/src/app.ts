@@ -14,6 +14,7 @@ import serviziRoutes from './routes/servizi.js';
 import ticketRoutes from './routes/ticket.js';
 import chiamateRoutes from './routes/chiamate.js';
 import monitorRoutes from './routes/monitor.js';
+import logoRoutes from './routes/logo.js';
 import { healthRouter } from './routes/health.js';
 
 export function createApp() {
@@ -59,6 +60,7 @@ export function createApp() {
   app.use('/api/ticket', ticketRoutes);
   app.use('/api/chiamate', chiamateRoutes);
   app.use('/api/monitor', monitorRoutes);
+  app.use('/api/logo', logoRoutes);
 
   // Error handler (deve essere l'ultimo middleware)
   app.use(errorHandler);

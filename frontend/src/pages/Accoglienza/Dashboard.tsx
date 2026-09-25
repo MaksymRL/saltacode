@@ -64,11 +64,7 @@ export default function AccoglienzaDashboard() {
   // ── Operatori ─────────────────────────────────────────────────────────────
   const [operatori, setOperatori] = useState<OperatoreStato[]>([]);
   // Ticker per i timer di pausa — un solo setInterval nel componente root
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, []);
+  // Ticker rimosso — non serve più per timer pausa operatori
   const loadOperatori = useCallback(async () => {
     try {
       const res = await apiClient.get<OperatoreStato[]>('/utenti/operatori');
@@ -91,8 +87,14 @@ export default function AccoglienzaDashboard() {
       });
     }
     if (msg.type === 'NUMERO_CHIAMATO') {
-      const { servizioId } = msg as unknown as { servizioId: number };
+      const { servizioId, chiamateOggi } = msg as unknown as { servizioId: number; chiamateOggi?: number };
       setCode((prev) => prev.map((c) => c.servizioId === servizioId ? { ...c, count: Math.max(0, c.count - 1) } : c));
+      if (chiamateOggi !== undefined) {
+        setServizi((prev) => prev.map((s) => s.id === servizioId
+          ? { ...s, _count: { ...s._count, chiamate: chiamateOggi } }
+          : s
+        ));
+      }
       loadOperatori();
     }
     if (msg.type === 'CODA_AGGIORNATA') {
@@ -279,14 +281,22 @@ export default function AccoglienzaDashboard() {
                             <span style={{ fontWeight: 900, fontSize: 18, color: '#0f3460', letterSpacing: 1 }}>{area.prefisso}{s.lettera}</span>
                           </td>
                           <td style={{ padding: '6px 10px', fontSize: 14, fontWeight: 600, color: '#1e293b' }}>{s.nome}</td>
-                          <td style={{ width: 70, padding: '6px 8px', textAlign: 'center' }}>
-                            <span style={{ fontSize: 22, fontWeight: 900, color: codaColor }}>{coda}</span>
-                            <div style={{ fontSize: 9, color: '#94a3b8', lineHeight: 1 }}>in attesa</div>
-                            {s._count.chiamate > 0 && (
-                              <div style={{ fontSize: 9, color: '#60a5fa', lineHeight: 1, marginTop: 1 }}>
-                                {s._count.chiamate} oggi
+                          <td style={{ padding: '6px 8px', textAlign: 'center' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                              <div style={{ textAlign: 'center' }}>
+                                <span style={{ fontSize: 22, fontWeight: 900, color: codaColor }}>{coda}</span>
+                                <div style={{ fontSize: 9, color: '#94a3b8', lineHeight: 1 }}>in attesa</div>
                               </div>
-                            )}
+                              {s._count.chiamate > 0 && (
+                                <>
+                                  <div style={{ width: 1, height: 28, background: '#e2e8f0', flexShrink: 0 }} />
+                                  <div style={{ textAlign: 'center' }}>
+                                    <span style={{ fontSize: 22, fontWeight: 900, color: '#3b82f6' }}>{s._count.chiamate}</span>
+                                    <div style={{ fontSize: 9, color: '#94a3b8', lineHeight: 1 }}>oggi</div>
+                                  </div>
+                                </>
+                              )}
+                            </div>
                           </td>
                           <td style={{ width: 140, padding: '6px 10px' }}>
                             <button onClick={() => handleEmittiTicket(s.id)} disabled={isEmitting || globalEmitting}
@@ -322,22 +332,16 @@ export default function AccoglienzaDashboard() {
           {/* Operatori — escludi l'utente corrente per evitare duplicati */}
           {operatori.filter((op) => op.id !== user?.id).map((op) => {
             if (!op || op.id == null) return null;
-            const pausaSecs = op.stato === 'PAUSA' && op.pausaInizio
-              ? Math.floor((now - new Date(op.pausaInizio).getTime()) / 1000)
-              : null;
-            const pausaStr = pausaSecs != null && pausaSecs >= 0
-              ? `${Math.floor(pausaSecs / 60)}:${(pausaSecs % 60).toString().padStart(2, '0')}` : null;
             const isAttivo = op.stato === 'ATTIVO';
             return (
               <div key={op.id} style={{ padding: '8px 12px', borderBottom: '1px solid #334155', display: 'flex', alignItems: 'flex-start', gap: 8 }}>
                 <span style={{ width: 8, height: 8, borderRadius: '50%', background: isAttivo ? '#22c55e' : '#f59e0b', display: 'inline-block', flexShrink: 0, marginTop: 4, boxShadow: isAttivo ? '0 0 6px #22c55e' : '0 0 6px #f59e0b' }} />
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 700, color: 'white', lineHeight: 1.2 }}>{op.cognome} {op.nome}</div>
-                  <div style={{ fontSize: 11, color: isAttivo ? '#4ade80' : '#fbbf24', marginTop: 2 }}>
-                    {isAttivo ? 'Attivo' : '⏸ Pausa'}
-                    {op.postazione && <span style={{ color: '#94a3b8', marginLeft: 4 }}>— {op.postazione}</span>}
+                  <div style={{ fontSize: 11, color: isAttivo ? '#4ade80' : '#94a3b8', marginTop: 2 }}>
+                    {isAttivo ? 'Attivo' : 'Offline'}
+                    {op.postazione && isAttivo && <span style={{ color: '#94a3b8', marginLeft: 4 }}>— {op.postazione}</span>}
                   </div>
-                  {pausaStr && <div style={{ fontSize: 10, fontFamily: 'monospace', color: '#fde68a', marginTop: 1 }}>{pausaStr}</div>}
                 </div>
               </div>
             );

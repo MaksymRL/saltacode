@@ -16,6 +16,8 @@ export default function MonitorDisplay() {
   const [time, setTime] = useState(new Date());
   // Audio sbloccato al primo gesto utente sul documento (nessun overlay)
   const [audioUnlocked, setAudioUnlocked] = useState(false);
+  const [isFlashing, setIsFlashing] = useState(false); // lampeggio numero corrente
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const retryCountRef = useRef(0);
@@ -128,11 +130,18 @@ export default function MonitorDisplay() {
     // DingLing sempre attivo (se audio sbloccato)
     playPlim();
 
+    // Lampeggio numero per 2.5 secondi (durata DingLing ~1.3s + buffer)
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    setIsFlashing(true);
+    flashTimerRef.current = setTimeout(() => setIsFlashing(false), 2500);
+
     // Voce server-side: solo se abilitata dalla config superadmin
     if (voiceEnabled && audioUnlocked) {
-      const numeroSolo = entry.ticket.replace(/[A-Za-z]/g, '');
-      const numeroSpaced = numeroSolo.split('').join(' ');
-      const text = `Numero ${numeroSpaced}, ${entry.servizio}, postazione ${entry.postazione}`;
+      const numeroSolo = entry.ticket.replace(/[A-Za-z]/g, '');       // solo cifre: "400"
+      const lettera   = entry.ticket.replace(/[^A-Za-z]/g, '').slice(-1).toUpperCase(); // ultima lettera: "A"
+      const cifre     = numeroSolo.split('').join(' ');                // "4 0 0"
+      const nomeServizio = entry.servizio.replace(/\s*\/\s*/g, ' ').trim(); // rimuove "/"
+      const text = `Numero ${lettera} ${cifre}, ${nomeServizio}, postazione ${entry.postazione}`;
       if (ttsQueueRef.current.length < 3) {
         // Aspetta la fine del DingLing (1.28s) + buffer
         setTimeout(() => {
@@ -208,6 +217,7 @@ export default function MonitorDisplay() {
     return () => {
       mountedRef.current = false;
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
       wsRef.current?.close();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -222,6 +232,12 @@ export default function MonitorDisplay() {
 
   return (
     <div style={S.root}>
+      <style>{`
+        @keyframes flash {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0; }
+        }
+      `}</style>
 
       {/* ── HEADER ── */}
       <div style={S.header}>
@@ -248,7 +264,12 @@ export default function MonitorDisplay() {
             {current ? (
               <>
                 <div style={S.currentService}>{current.servizio}</div>
-                <div style={S.currentTicket}>{current.ticket}</div>
+                <div style={{
+                  ...S.currentTicket,
+                  animation: isFlashing ? 'flash 0.4s ease-in-out 6' : 'none',
+                }}>
+                  {current.ticket}
+                </div>
                 <div style={S.currentPost}>Postazione {current.postazione}</div>
               </>
             ) : (
@@ -284,24 +305,20 @@ export default function MonitorDisplay() {
                 <th style={{ ...S.th, textAlign: 'left' }}>SERVIZIO</th>
                 <th style={S.th}>N°</th>
                 <th style={S.th}>POST.</th>
-                <th style={{ ...S.th, textAlign: 'right' }}>ORA</th>
               </tr>
             </thead>
             <tbody>
               {history.slice(0, 15).map((entry, i) => (
-                <tr key={i} style={{ background: i === 0 ? 'rgba(231,76,60,0.12)' : i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.04)' }}>
+                <tr key={i} style={{ background: i === 0 ? '#fff5f5' : i % 2 === 0 ? 'white' : '#f8fafc' }}>
                   <td style={{ ...S.td, textAlign: 'left', color: rowColor(i) }}>{entry.servizio}</td>
                   <td style={{ ...S.td, fontWeight: 800, color: rowColor(i) }}>{entry.ticket}</td>
-                  <td style={{ ...S.td, color: '#aaa' }}>{entry.postazione}</td>
-                  <td style={{ ...S.td, textAlign: 'right', color: '#888', fontSize: 16 }}>
-                    {new Date(entry.timestamp).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}
-                  </td>
+                  <td style={{ ...S.td, color: '#475569' }}>{entry.postazione}</td>
                 </tr>
               ))}
               {Array.from({ length: Math.max(0, 15 - history.length) }, (_, i) => (
-                <tr key={`e${i}`} style={{ background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.04)' }}>
+                <tr key={`e${i}`} style={{ background: i % 2 === 0 ? 'white' : '#f8fafc' }}>
                   <td style={S.td}>&nbsp;</td><td style={S.td}>&nbsp;</td>
-                  <td style={S.td}>&nbsp;</td><td style={S.td}>&nbsp;</td>
+                  <td style={S.td}>&nbsp;</td>
                 </tr>
               ))}
             </tbody>
@@ -312,20 +329,20 @@ export default function MonitorDisplay() {
       {/* ── FOOTER ── */}
       <div style={S.footer}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ width: 10, height: 10, borderRadius: '50%', display: 'inline-block', background: connected ? '#2ecc71' : '#e74c3c', boxShadow: connected ? '0 0 8px #2ecc71' : '0 0 8px #e74c3c' }} />
-          <span style={{ fontSize: 13, color: '#aaa' }}>{connected ? 'Connesso' : 'Riconnessione…'}</span>
+          <span style={{ width: 10, height: 10, borderRadius: '50%', display: 'inline-block', background: connected ? '#16a34a' : '#e74c3c', boxShadow: connected ? '0 0 6px #16a34a' : '0 0 6px #e74c3c' }} />
+          <span style={{ fontSize: 13, color: '#64748b' }}>{connected ? 'Connesso' : 'Riconnessione…'}</span>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: 11, color: audioUnlocked ? '#2ecc71' : '#666' }}>
+          <span style={{ fontSize: 11, color: audioUnlocked ? '#16a34a' : '#94a3b8' }}>
             {audioUnlocked ? '🔔 Audio attivo' : '🔇 Audio in attesa…'}
           </span>
           {voiceConfigLoaded && audioUnlocked && (
             <span style={{
               fontSize: 11, padding: '2px 8px', borderRadius: 4,
-              background: voiceEnabled ? 'rgba(39,174,96,0.15)' : 'rgba(100,100,100,0.15)',
-              border: `1px solid ${voiceEnabled ? 'rgba(39,174,96,0.3)' : 'rgba(100,100,100,0.2)'}`,
-              color: voiceEnabled ? '#2ecc71' : '#555',
+              background: voiceEnabled ? 'rgba(22,163,74,0.1)' : 'rgba(100,116,139,0.1)',
+              border: `1px solid ${voiceEnabled ? 'rgba(22,163,74,0.3)' : 'rgba(100,116,139,0.2)'}`,
+              color: voiceEnabled ? '#16a34a' : '#64748b',
             }}>
               {voiceEnabled ? '🔊 Voce ON' : '🔇 Voce OFF'}
             </span>
@@ -333,7 +350,7 @@ export default function MonitorDisplay() {
           {!ttsSupported && <span style={{ fontSize: 11, color: '#f59e0b' }}>⚠ TTS non supportato</span>}
         </div>
 
-        <span style={{ fontSize: 12, color: '#555' }}>Saltacode Queue Management</span>
+        <span style={{ fontSize: 12, color: '#94a3b8' }}>Saltacode Queue Management</span>
       </div>
     </div>
   );
@@ -341,39 +358,39 @@ export default function MonitorDisplay() {
 
 function rowColor(i: number): string {
   if (i === 0) return '#e74c3c';
-  if (i === 1) return '#2ecc71';
-  if (i === 2) return '#3498db';
-  return '#ccc';
+  if (i === 1) return '#16a34a';
+  if (i === 2) return '#2563eb';
+  return '#374151';
 }
 
 const S: Record<string, React.CSSProperties> = {
-  root: { display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#0f0f1a', fontFamily: "'Tahoma','Helvetica Neue',sans-serif", overflow: 'hidden', color: 'white', userSelect: 'none' },
-  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 30px', background: 'linear-gradient(90deg,#1a1a2e,#16213e)', borderBottom: '2px solid #e74c3c', flexShrink: 0 },
+  root: { display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: 'white', fontFamily: "'Tahoma','Helvetica Neue',sans-serif", overflow: 'hidden', color: '#1e293b', userSelect: 'none' },
+  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 30px', background: 'white', borderBottom: '3px solid #e74c3c', flexShrink: 0 },
   headerLogo: { display: 'flex', alignItems: 'center', gap: 4 },
   headerTitle: { fontSize: 26, fontWeight: 900, letterSpacing: 4, color: '#e74c3c' },
-  headerSub: { fontSize: 13, color: '#888', marginLeft: 14, letterSpacing: 1, alignSelf: 'flex-end', paddingBottom: 2 },
+  headerSub: { fontSize: 13, color: '#94a3b8', marginLeft: 14, letterSpacing: 1, alignSelf: 'flex-end', paddingBottom: 2 },
   headerClock: { textAlign: 'right' },
-  clockTime: { fontSize: 32, fontWeight: 900, fontFamily: 'monospace', letterSpacing: 2, color: 'white' },
-  clockDate: { fontSize: 13, color: '#888', textTransform: 'capitalize' },
+  clockTime: { fontSize: 32, fontWeight: 900, fontFamily: 'monospace', letterSpacing: 2, color: '#1e293b' },
+  clockDate: { fontSize: 13, color: '#64748b', textTransform: 'capitalize' },
   body: { display: 'flex', flex: 1, overflow: 'hidden' },
   leftPanel: { width: '62%', display: 'flex', flexDirection: 'column', padding: '20px 30px', gap: 12 },
-  currentBox: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg,#1a1a2e,#16213e)', border: '2px solid rgba(231,76,60,0.4)', borderRadius: 12, padding: '20px 30px', textAlign: 'center' },
-  currentLabel: { fontSize: 14, fontWeight: 700, letterSpacing: 4, color: '#e74c3c', marginBottom: 8, borderBottom: '1px solid rgba(231,76,60,0.3)', paddingBottom: 8, width: '100%' },
-  currentService: { fontSize: 28, fontWeight: 600, color: '#94a3b8', marginBottom: 4, lineHeight: 1.2, textTransform: 'uppercase' },
-  currentTicket: { fontSize: 140, fontWeight: 900, color: '#e74c3c', lineHeight: 1, letterSpacing: 4, textShadow: '0 0 40px rgba(231,76,60,0.5)' },
-  currentPost: { fontSize: 42, color: 'white', marginTop: 8, fontWeight: 800, letterSpacing: 2 },
-  currentEmpty: { fontSize: 40, color: '#333', fontStyle: 'italic' },
-  prevDivider: { fontSize: 11, fontWeight: 700, letterSpacing: 4, color: '#333', textAlign: 'center' },
+  currentBox: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#f8fafc', border: '2px solid #fca5a5', borderRadius: 12, padding: '20px 30px', textAlign: 'center' },
+  currentLabel: { fontSize: 14, fontWeight: 700, letterSpacing: 4, color: '#e74c3c', marginBottom: 8, borderBottom: '1px solid #fca5a5', paddingBottom: 8, width: '100%' },
+  currentService: { fontSize: 28, fontWeight: 600, color: '#475569', marginBottom: 4, lineHeight: 1.2, textTransform: 'uppercase' },
+  currentTicket: { fontSize: 140, fontWeight: 900, color: '#e74c3c', lineHeight: 1, letterSpacing: 4, textShadow: '0 2px 12px rgba(231,76,60,0.2)' },
+  currentPost: { fontSize: 42, color: '#1e293b', marginTop: 8, fontWeight: 800, letterSpacing: 2 },
+  currentEmpty: { fontSize: 40, color: '#cbd5e1', fontStyle: 'italic' },
+  prevDivider: { fontSize: 11, fontWeight: 700, letterSpacing: 4, color: '#cbd5e1', textAlign: 'center' },
   prevRow: { display: 'flex', gap: 16, flexShrink: 0 },
-  prevBox: { flex: 1, padding: '12px 16px', borderRadius: 10, border: '2px solid', background: 'rgba(255,255,255,0.03)', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 2 },
-  prevService: { fontSize: 14, fontWeight: 600, color: '#888' },
+  prevBox: { flex: 1, padding: '12px 16px', borderRadius: 10, border: '2px solid', background: '#f8fafc', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 2 },
+  prevService: { fontSize: 14, fontWeight: 600, color: '#64748b' },
   prevTicket: { fontSize: 48, fontWeight: 900, letterSpacing: 2 },
-  prevPost: { fontSize: 16, color: '#888', fontWeight: 700 },
-  divider: { width: 2, background: 'rgba(255,255,255,0.06)', flexShrink: 0 },
+  prevPost: { fontSize: 16, color: '#64748b', fontWeight: 700 },
+  divider: { width: 2, background: '#e2e8f0', flexShrink: 0 },
   rightPanel: { flex: 1, display: 'flex', flexDirection: 'column', padding: '20px 24px', overflow: 'hidden' },
-  tableTitle: { fontSize: 12, fontWeight: 700, letterSpacing: 4, color: '#444', marginBottom: 10, textAlign: 'center' },
+  tableTitle: { fontSize: 12, fontWeight: 700, letterSpacing: 4, color: '#94a3b8', marginBottom: 10, textAlign: 'center' },
   table: { width: '100%', borderCollapse: 'collapse' },
-  th: { fontSize: 12, fontWeight: 700, color: '#555', padding: '6px 10px', textAlign: 'center', borderBottom: '1px solid rgba(255,255,255,0.08)', letterSpacing: 1 },
-  td: { fontSize: 20, fontWeight: 600, color: '#ccc', padding: '5px 10px', textAlign: 'center', borderBottom: '1px solid rgba(255,255,255,0.05)' },
-  footer: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 30px', background: '#0a0a14', borderTop: '1px solid rgba(255,255,255,0.06)', flexShrink: 0 },
+  th: { fontSize: 12, fontWeight: 700, color: '#64748b', padding: '6px 10px', textAlign: 'center', borderBottom: '2px solid #e2e8f0', letterSpacing: 1 },
+  td: { fontSize: 20, fontWeight: 600, color: '#1e293b', padding: '5px 10px', textAlign: 'center', borderBottom: '1px solid #f1f5f9' },
+  footer: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 30px', background: '#f8fafc', borderTop: '1px solid #e2e8f0', flexShrink: 0 },
 };

@@ -69,10 +69,22 @@ export async function callNext(
   });
 
   if (servizio) {
+    // Conta le chiamate di oggi per questo servizio (ticket CHIAMATO o SERVITO emessi oggi)
+    const oggi = new Date(); oggi.setHours(0, 0, 0, 0);
+    const domani = new Date(oggi); domani.setDate(domani.getDate() + 1);
+    const chiamateOggi = await prisma.ticket.count({
+      where: {
+        servizioId,
+        stato: { in: ['CHIAMATO', 'SERVITO'] },
+        emessoPer: { gte: oggi, lt: domani },
+      },
+    });
+
     broadcastAll(servizio.areaId, {
       type: 'NUMERO_CHIAMATO',
       ticket: ticket.numero,
-      servizioId,           // aggiunto: permette ai client di aggiornare la coda esatta
+      servizioId,
+      chiamateOggi,
       postazione,
       servizio: servizio.nome,
       timestamp: new Date().toISOString(),

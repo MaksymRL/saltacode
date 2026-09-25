@@ -27,10 +27,22 @@ apiClient.interceptors.response.use(
   },
   (error) => {
     if (axios.isAxiosError(error) && error.response?.status === 401) {
-      // Token scaduto o non valido → redirect al login
-      localStorage.removeItem('saltacode_token');
-      localStorage.removeItem('saltacode_user');
-      window.location.href = '/login';
+      const url = error.config?.url ?? '';
+      // Redirect al login SOLO se la sessione era attiva (token presente)
+      // e NON durante login/select-role/switch-role (che generano 401 legittimi)
+      const isAuthRoute = url.includes('/auth/login') ||
+                          url.includes('/auth/select-role') ||
+                          url.includes('/auth/switch-role') ||
+                          url.includes('/utenti/change-password') ||
+                          url.includes('/utenti/me');
+      const hasToken = !!localStorage.getItem('saltacode_token');
+
+      if (hasToken && !isAuthRoute) {
+        // Token scaduto o non valido → pulisce e reindirizza
+        localStorage.removeItem('saltacode_token');
+        localStorage.removeItem('saltacode_user');
+        window.location.href = '/login';
+      }
     }
     return Promise.reject(error);
   }

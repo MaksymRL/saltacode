@@ -106,11 +106,7 @@ export default function OperatoreDashboard() {
   // ── Colleghi ──────────────────────────────────────────────────────────────
   const [colleghi, setColleghi] = useState<OperatoreStato[]>([]);
   // Ticker ogni secondo per aggiornare i timer di pausa senza hook nei figli
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, []);
+  // Ticker rimosso — non serve più per timer pausa colleghi
   const loadColleghi = useCallback(async () => {
     try { const r = await apiClient.get<OperatoreStato[]>('/utenti/operatori'); setColleghi(r.data); }
     catch { /* non bloccante */ }
@@ -129,8 +125,15 @@ export default function OperatoreDashboard() {
       });
     }
     if (msg.type === 'NUMERO_CHIAMATO') {
-      const { servizioId } = msg as unknown as { servizioId: number };
+      const { servizioId, chiamateOggi } = msg as unknown as { servizioId: number; chiamateOggi?: number };
       setCode((prev) => prev.map((c) => c.servizioId === servizioId ? { ...c, count: Math.max(0, c.count - 1) } : c));
+      // Aggiorna il contatore chiamate oggi senza ricaricare tutti i servizi
+      if (chiamateOggi !== undefined) {
+        setServizi((prev) => prev.map((s) => s.id === servizioId
+          ? { ...s, _count: { ...s._count, chiamate: chiamateOggi } }
+          : s
+        ));
+      }
       // Refresh lista operatori dopo ogni chiamata
       loadColleghi();
     }
@@ -359,11 +362,21 @@ export default function OperatoreDashboard() {
                             {last && <div style={{ fontSize: 10, color: '#16a34a', fontFamily: 'monospace', marginTop: 1 }}>↳ {last.ticketNumero}</div>}
                           </td>
                           <td style={{ padding: '6px 4px', textAlign: 'center' }}>
-                            <span style={{ fontSize: 24, fontWeight: 900, color: codaColor, lineHeight: 1 }}>{coda}</span>
-                            <div style={{ fontSize: 9, color: '#94a3b8' }}>attesa</div>
-                            {s._count.chiamate > 0 && (
-                              <div style={{ fontSize: 9, color: '#60a5fa', marginTop: 1 }}>{s._count.chiamate} oggi</div>
-                            )}
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                              <div style={{ textAlign: 'center' }}>
+                                <span style={{ fontSize: 24, fontWeight: 900, color: codaColor, lineHeight: 1 }}>{coda}</span>
+                                <div style={{ fontSize: 9, color: '#94a3b8' }}>attesa</div>
+                              </div>
+                              {s._count.chiamate > 0 && (
+                                <>
+                                  <div style={{ width: 1, height: 28, background: '#e2e8f0', flexShrink: 0 }} />
+                                  <div style={{ textAlign: 'center' }}>
+                                    <span style={{ fontSize: 24, fontWeight: 900, color: '#3b82f6', lineHeight: 1 }}>{s._count.chiamate}</span>
+                                    <div style={{ fontSize: 9, color: '#94a3b8' }}>oggi</div>
+                                  </div>
+                                </>
+                              )}
+                            </div>
                           </td>
                           <td style={{ padding: '5px 4px' }}>
                             <button onClick={() => handleChiama(s)} disabled={!canCall}
@@ -416,22 +429,16 @@ export default function OperatoreDashboard() {
           {/* Colleghi */}
           {altriOperatori.map((op) => {
             if (!op || op.id == null) return null;
-            const pausaSecs = op.stato === 'PAUSA' && op.pausaInizio
-              ? Math.floor((now - new Date(op.pausaInizio).getTime()) / 1000)
-              : null;
-            const pausaStr = pausaSecs != null && pausaSecs >= 0
-              ? `${Math.floor(pausaSecs / 60)}:${(pausaSecs % 60).toString().padStart(2, '0')}` : null;
             const isAttivo = op.stato === 'ATTIVO';
             return (
               <div key={op.id} style={{ padding: '8px 12px', borderBottom: '1px solid #334155', display: 'flex', alignItems: 'flex-start', gap: 8 }}>
                 <span style={{ width: 8, height: 8, borderRadius: '50%', background: isAttivo ? '#22c55e' : '#f59e0b', display: 'inline-block', flexShrink: 0, marginTop: 4, boxShadow: isAttivo ? '0 0 6px #22c55e' : '0 0 6px #f59e0b' }} />
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 700, color: 'white', lineHeight: 1.2 }}>{op.cognome} {op.nome}</div>
-                  <div style={{ fontSize: 11, color: isAttivo ? '#4ade80' : '#fbbf24', marginTop: 2 }}>
-                    {isAttivo ? 'Attivo' : '⏸ Pausa'}
-                    {op.postazione && <span style={{ color: '#94a3b8', marginLeft: 4 }}>— {op.postazione}</span>}
+                  <div style={{ fontSize: 11, color: isAttivo ? '#4ade80' : '#94a3b8', marginTop: 2 }}>
+                    {isAttivo ? 'Attivo' : 'Offline'}
+                    {op.postazione && isAttivo && <span style={{ color: '#94a3b8', marginLeft: 4 }}>— {op.postazione}</span>}
                   </div>
-                  {pausaStr && <div style={{ fontSize: 10, fontFamily: 'monospace', color: '#fde68a', marginTop: 1 }}>{pausaStr}</div>}
                 </div>
               </div>
             );
